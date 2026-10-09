@@ -1,6 +1,11 @@
 set(HP2_UNREAL_ROOT "${PROJECT_SOURCE_DIR}/HarryPotter2/Unreal" CACHE PATH "Engine data root")
 set(HP2_THIRD_PARTY_ROOT "${PROJECT_SOURCE_DIR}/ThirdParty")
 
+set(HP2_PLATFORM_CORE_SOURCE "${HP2_UNREAL_ROOT}/Core/Src/UnUnix.cpp")
+if(WIN32)
+    set(HP2_PLATFORM_CORE_SOURCE "${HP2_UNREAL_ROOT}/Core/Src/UnWindowsHP2.cpp")
+endif()
+
 # Core.dsp runtime units plus UnCoreNative.cpp for the static native lookup
 # table. UnPSX2.cpp, UnVcWin32.cpp, legacy UnGUID.cpp, and the unused
 # AudioMutex.cpp unit are intentionally excluded from this arm64 graph.
@@ -22,7 +27,7 @@ set(HP2_CORE_SOURCES
     "${HP2_UNREAL_ROOT}/Core/Src/UnName.cpp"
     "${HP2_UNREAL_ROOT}/Core/Src/UnObj.cpp"
     "${HP2_UNREAL_ROOT}/Core/Src/UnProp.cpp"
-    "${HP2_UNREAL_ROOT}/Core/Src/UnUnix.cpp"
+    "${HP2_PLATFORM_CORE_SOURCE}"
     "${HP2_UNREAL_ROOT}/Core/Src/UnFileStream.cpp"
     "${HP2_UNREAL_ROOT}/Core/Src/FEAXABlockDecoder.cpp"
     "${HP2_UNREAL_ROOT}/Core/Src/HP2CrashReporter.cpp"
@@ -155,19 +160,20 @@ set(HP2_LAUNCHER_CORE_SOURCES
     "${HP2_UNREAL_ROOT}/SDLLaunch/Src/HP2LauncherStore.cpp"
     "${HP2_UNREAL_ROOT}/SDLLaunch/Src/HP2DataImport.cpp"
 )
+set(HP2_LAUNCHER_UI_SOURCES
+    "${HP2_UNREAL_ROOT}/SDLLaunch/Src/HP2Launcher.cpp"
+    "${HP2_UNREAL_ROOT}/SDLLaunch/Src/HP2LauncherPlatform.cpp"
+)
 if(APPLE)
-    set(HP2_NATIVE_LAUNCHER_SOURCE
-        "${HP2_UNREAL_ROOT}/SDLLaunch/Src/HP2MacLauncher.mm"
+    set(HP2_LAUNCHER_PLATFORM_MAC_SOURCE
+        "${HP2_UNREAL_ROOT}/SDLLaunch/Src/HP2LauncherPlatformMac.mm"
     )
-else()
-    set(HP2_NATIVE_LAUNCHER_SOURCE
-        "${HP2_UNREAL_ROOT}/SDLLaunch/Src/HP2ShellLauncher.cpp"
-    )
+    list(APPEND HP2_LAUNCHER_UI_SOURCES "${HP2_LAUNCHER_PLATFORM_MAC_SOURCE}")
 endif()
 set(HP2_SDL_LAUNCH_SOURCES
     "${HP2_UNREAL_ROOT}/SDLLaunch/Src/SDLLaunch.cpp"
     ${HP2_LAUNCHER_CORE_SOURCES}
-    "${HP2_NATIVE_LAUNCHER_SOURCE}"
+    ${HP2_LAUNCHER_UI_SOURCES}
 )
 set(HP2_UCC_SOURCES
     "${HP2_UNREAL_ROOT}/UCC/Src/UCC.cpp"
@@ -211,7 +217,7 @@ set(HP2_PLANNED_IMPLEMENTATION_SOURCES
     "${HP2_AUDIO_TEST_SOURCE}"
     "${HP2_DXT1_TEST_SOURCE}"
     ${HP2_LAUNCHER_CORE_SOURCES}
-    "${HP2_NATIVE_LAUNCHER_SOURCE}"
+    ${HP2_LAUNCHER_UI_SOURCES}
     "${HP2_LAUNCHER_TEST_SOURCE}"
     "${HP2_NATIVE_TYPOGRAPHY_TEST_SOURCE}"
 )

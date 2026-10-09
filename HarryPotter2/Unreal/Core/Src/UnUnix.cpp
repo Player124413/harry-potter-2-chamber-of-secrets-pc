@@ -618,7 +618,9 @@ void* appGetDllExport( void* DllHandle, const TCHAR* ProcName )
 void appDebugBreak()
 {
 	guard(appDebugBreak);
-#if ASMLINUX && (defined(__i386__) || defined(__x86_64__))
+#if defined(__clang__)
+	__builtin_debugtrap();
+#elif ASMLINUX && (defined(__i386__) || defined(__x86_64__))
 	asm("int $03");
 #else
 	raise(SIGTRAP);

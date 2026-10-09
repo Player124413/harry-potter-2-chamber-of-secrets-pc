@@ -26,10 +26,13 @@
 #include "XOpenGLDrv.h"
 #include "XOpenGL.h"
 
-#ifndef _WIN32
+#if !XOPENGL_WGL
 // HP2 end-of-frame capture (HP2_CAPTURE_FRAMES): PNG encoding via the vendored
 // single-header stb_image_write; the implementation is compiled into this
 // translation unit only.
+#if defined(_WIN32)
+#define STBIW_WINDOWS_UTF8
+#endif
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "../ThirdParty/stb/stb_image_write.h"
 #endif
@@ -42,6 +45,7 @@
 #include <string>
 #include <vector>
 #else
+#include <direct.h>
 # if !OLDUNREAL_WINXP
 #  include <d3d11.h>
 #  include <dxgi.h>
@@ -53,7 +57,7 @@
 #define XOPENGL_DXGI_FORMAT DXGI_FORMAT_R8G8B8A8_UNORM
 #endif
 
-#if !defined(_WIN32)
+#if !XOPENGL_WGL
 namespace
 {
 	template <typename TAttribute>
@@ -97,7 +101,7 @@ namespace
 IMPLEMENT_CLASS(UXOpenGLRenderDevice);
 
 #if !UNREAL_OLDUNREAL && !UNREAL_TOURNAMENT_OLDUNREAL
-# ifdef _WIN32
+# if XOPENGL_WGL
 #  pragma comment(lib,"Winmm")
 void TimerBegin()
 {
@@ -180,7 +184,7 @@ void UXOpenGLRenderDevice::StaticConstructor()
 	new(GetClass(), TEXT("UseBindlessTextures"), RF_Public)UBoolProperty(CPP_PROPERTY(UseBindlessTextures), TEXT("Options"), CPF_Config);
 	new(GetClass(), TEXT("UseShaderDrawParameters"), RF_Public)UBoolProperty(CPP_PROPERTY(UseShaderDrawParameters), TEXT("Options"), CPF_Config);
 	new(GetClass(), TEXT("UseShaderCache"), RF_Public)UBoolProperty(CPP_PROPERTY(UseShaderCache), TEXT("Options"), CPF_Config);
-#if _WIN32
+#if XOPENGL_WGL
 	new(GetClass(), TEXT("ReduceMouseLag"), RF_Public)UBoolProperty(CPP_PROPERTY(ReduceMouseLag), TEXT("Options"), CPF_Config);
 #endif
 
@@ -239,7 +243,7 @@ void UXOpenGLRenderDevice::StaticConstructor()
 	UseShaderDrawParameters = 0;
 	UseBufferInvalidation = 0;
 	UseShaderCache = 0;
-#if _WIN32
+#if XOPENGL_WGL
 	ReduceMouseLag = 0;
 #endif
 #if UNREAL_OLDUNREAL || UNREAL_TOURNAMENT_OLDUNREAL
@@ -298,7 +302,7 @@ void UXOpenGLRenderDevice::StaticConstructor()
 	unguard;
 }
 
-#if _WIN32
+#if XOPENGL_WGL
 HWND UXOpenGLRenderDevice::CreateTemporaryWindow(HDC& OutDC) 
 {
 	// Create a temporary context so we can load the wgl functions
@@ -383,7 +387,7 @@ UBOOL UXOpenGLRenderDevice::Init(UViewport* InViewport, INT NewX, INT NewY, INT 
 #if defined(__EMSCRIPTEN__)
 	// WebGL2 exposes only the OpenGL ES 3.0 surface.
 	OpenGLVersion = GL_ES;
-#else
+#elif MACOSX
 	// HP2's macOS renderer is deliberately limited to Apple's OpenGL 4.1 core surface.
 	OpenGLVersion = GL_Core;
 #endif
@@ -401,7 +405,7 @@ UBOOL UXOpenGLRenderDevice::Init(UViewport* InViewport, INT NewX, INT NewY, INT 
 	LastZMode = 255;
 	NumClipPlanes = 0;
 
-#if _WIN32 && !UNREAL_OLDUNREAL && !UNREAL_TOURNAMENT_OLDUNREAL
+#if XOPENGL_WGL && !UNREAL_OLDUNREAL && !UNREAL_TOURNAMENT_OLDUNREAL
 	TimerBegin();
 #endif
 
@@ -506,7 +510,7 @@ UBOOL UXOpenGLRenderDevice::Init(UViewport* InViewport, INT NewX, INT NewY, INT 
 
 	EnvironmentMaps = 0; //not yet implemented.
 
-#if _WIN32
+#if XOPENGL_WGL
 	// SharedBindMap assumes GL texture IDs are valid across every viewport's context --
 	// true here because CreateOpenGLContext() actually calls wglShareLists() below.
 	if (ShareLists && !SharedBindMap)
@@ -521,7 +525,7 @@ UBOOL UXOpenGLRenderDevice::Init(UViewport* InViewport, INT NewX, INT NewY, INT 
 #endif
 
 	// Initialize process-wide GL state
-#if _WIN32
+#if XOPENGL_WGL
 	// Get list of device modes.
 	for (INT i = 0;; i++)
 	{
@@ -744,7 +748,7 @@ UBOOL UXOpenGLRenderDevice::RunNativeTextRuntimeSmoke(FSceneNode*)
 }
 #endif
 
-#if _WIN32
+#if XOPENGL_WGL
 LRESULT CALLBACK WndProc(HWND hWnd, UINT uiMsg, WPARAM wParam, LPARAM lParam)
 {
 	if (uiMsg == WM_CLOSE)
@@ -756,7 +760,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT uiMsg, WPARAM wParam, LPARAM lParam)
 }
 #endif
 
-#if _WIN32
+#if XOPENGL_WGL
 UBOOL UXOpenGLRenderDevice::SetWindowPixelFormat(HDC DC)
 {
 	guard(UXOpenGLRenderDevice::SetWindowPixelFormat);
@@ -788,7 +792,7 @@ UBOOL UXOpenGLRenderDevice::IsSupportedGLVersion(INT MajorVersion, INT MinorVers
 	SelectedMajorVersion = MajorVersion;
 	SelectedMinorVersion = MinorVersion;
 
-#if _WIN32
+#if XOPENGL_WGL
 	HDC TemphDC;
 	HWND TempWindow = CreateTemporaryWindow(TemphDC);
 #else
@@ -801,7 +805,7 @@ UBOOL UXOpenGLRenderDevice::IsSupportedGLVersion(INT MajorVersion, INT MinorVers
 	SelectedMajorVersion = TmpMajorVersion;
 	SelectedMinorVersion = TmpMinorVersion;
 
-#if _WIN32
+#if XOPENGL_WGL
 	DestroyTemporaryWindow(TempWindow, TemphDC);
 #else
 	DestroyTemporaryWindow(TempWindow);
@@ -817,6 +821,13 @@ UBOOL UXOpenGLRenderDevice::IsSupportedGLVersion(INT MajorVersion, INT MinorVers
 //
 void UXOpenGLRenderDevice::SelectGLVersion()
 {
+#if !defined(__EMSCRIPTEN__) && !MACOSX
+	if (OpenGLVersion == GL_Core && !IsSupportedGLVersion(3, 3))
+	{
+		GWarn->Logf(TEXT("XOpenGL: OpenGL 3.3 core unavailable; falling back to OpenGL ES 3.1"));
+		OpenGLVersion = GL_ES;
+	}
+#endif
 	if (OpenGLVersion == GL_ES)
 	{
 		SelectedMajorVersion = 3;
@@ -893,7 +904,7 @@ void UXOpenGLRenderDevice::SelectGLVersion()
 	SelectedGLVersion = true;
 }
 
-#if !_WIN32
+#if !XOPENGL_WGL
 UBOOL UXOpenGLRenderDevice::SetSDLAttributes() const
 {
     guard(UXOpenGLRenderDevice::SetSDLAttributes);
@@ -927,7 +938,7 @@ UBOOL UXOpenGLRenderDevice::CreateOpenGLContext(void* Window, INT NewColorBytes,
 	if (!Window)
 		appErrorf(TEXT("XOpenGL: No Window found!"));
 
-#if !_WIN32
+#if !XOPENGL_WGL
     // On non-Windows targets, we need to specify the requested GL version
     // before creating the window
 	glContext = SDL_GL_CreateContext((SDL_Window*)Window);
@@ -990,7 +1001,7 @@ UBOOL UXOpenGLRenderDevice::CreateOpenGLContext(void* Window, INT NewColorBytes,
 		// Probing (IsSupportedGLVersion) expects failures; only report real ones.
 		if (!QueryOnly)
 		{
-#if _WIN32
+#if XOPENGL_WGL
 			GWarn->Logf(TEXT("XOpenGL: OpenGL %i.%i context creation failed"), SelectedMajorVersion, SelectedMinorVersion);
 #else
 			GWarn->Logf(TEXT("XOpenGL: SDL_GL_CreateContext failed for OpenGL %i.%i: %ls"), SelectedMajorVersion, SelectedMinorVersion, appFromAnsi(SDL_GetError()));
@@ -1001,7 +1012,7 @@ UBOOL UXOpenGLRenderDevice::CreateOpenGLContext(void* Window, INT NewColorBytes,
 
 	if (QueryOnly)
 	{
-#if _WIN32
+#if XOPENGL_WGL
 		wglDeleteContext(glContext);
 		ReleaseDC(TmpWnd, hDC);
 	#else
@@ -1013,7 +1024,7 @@ UBOOL UXOpenGLRenderDevice::CreateOpenGLContext(void* Window, INT NewColorBytes,
 
 	MakeCurrent();
 
-#if _WIN32
+#if XOPENGL_WGL
 	if (!gladLoadGL())
 		appErrorf(TEXT("XOpenGL: Init failed!"));
 #else
@@ -1032,6 +1043,21 @@ UBOOL UXOpenGLRenderDevice::CreateOpenGLContext(void* Window, INT NewColorBytes,
 		XOpenGLDestroyContext(glContext);
 		glContext = NULL;
 		return 0;
+	}
+#endif
+#if !defined(__EMSCRIPTEN__)
+	if (OpenGLVersion == GL_ES)
+	{
+		GLint MaxUniformBlockSize = 0;
+		glGetIntegerv(GL_MAX_UNIFORM_BLOCK_SIZE, &MaxUniformBlockSize);
+		if (MaxUniformBlockSize < (GLint)sizeof(LightInfo))
+		{
+			GWarn->Logf(TEXT("XOpenGL: uniform block budget %i < %i required"),
+				MaxUniformBlockSize, (GLint)sizeof(LightInfo));
+			XOpenGLDestroyContext(glContext);
+			glContext = NULL;
+			return 0;
+		}
 	}
 #endif
 
@@ -1053,7 +1079,7 @@ UBOOL UXOpenGLRenderDevice::CreateOpenGLContext(void* Window, INT NewColorBytes,
 		AllExtensions += TEXT(" ");
 	}
 
-#if _WIN32
+#if XOPENGL_WGL
 	if (wglGetExtensionsStringARB)
 		AllExtensions += appFromAnsi(wglGetExtensionsStringARB(hDC));
 #endif
@@ -1080,7 +1106,7 @@ UBOOL UXOpenGLRenderDevice::CreateOpenGLContext(void* Window, INT NewColorBytes,
 		GWarn->Logf(TEXT("XOpenGL: OpenGL debugging enabled, this can cause severe performance drain!"));
 	}
 
-#if _WIN32
+#if XOPENGL_WGL
 	if (ShareLists && AllContexts.Num())
 		check(wglShareLists(AllContexts(0), glContext) == 1);
 #endif
@@ -1096,7 +1122,7 @@ UBOOL UXOpenGLRenderDevice::CreateOpenGLContext(void* Window, INT NewColorBytes,
 void UXOpenGLRenderDevice::MakeCurrent()
 {
 	guard(UXOpenGLRenderDevice::MakeCurrent);
-#if !_WIN32
+#if !XOPENGL_WGL
 	// stijn: don't decide whether to skip the real MakeCurrent call based on our own
 	// cached CurrentGLContext. Other SDL windows in this process (e.g., a SoftDrv
 	// viewport doing SDL_GetWindowSurface/SDL_UpdateWindowSurface) can change the actual
@@ -1227,7 +1253,7 @@ UBOOL UXOpenGLRenderDevice::SetRes(INT NewX, INT NewY, INT NewColorBytes, UBOOL 
 			return 0;
 
 		// stijn: force a switch to our context if we're in the editor
-#if _WIN32
+#if XOPENGL_WGL
 		if (GIsEditor)
 		{
 			wglMakeCurrent(NULL, NULL);
@@ -1238,7 +1264,7 @@ UBOOL UXOpenGLRenderDevice::SetRes(INT NewX, INT NewY, INT NewColorBytes, UBOOL 
 		return 1;
 	}
 
-#if _WIN32
+#if XOPENGL_WGL
 	// Change display settings.
 	if (Fullscreen)
 	{
@@ -1313,13 +1339,13 @@ UBOOL UXOpenGLRenderDevice::SetRes(INT NewX, INT NewY, INT NewColorBytes, UBOOL 
 	{
 		GWarn->Logf(TEXT("XOpenGL: Change window size failed!"));
 		if (Fullscreen)
-#if _WIN32
+#if XOPENGL_WGL
 			ChangeDisplaySettingsW(NULL, 0);
 #endif
 		return 0;
 	}
 
-#if _WIN32
+#if XOPENGL_WGL
 	hWnd = (HWND)Viewport->GetWindow();
 #else
 	Window = (SDL_Window*)Viewport->GetWindow();
@@ -1340,7 +1366,7 @@ UBOOL UXOpenGLRenderDevice::SetRes(INT NewX, INT NewY, INT NewColorBytes, UBOOL 
 		return 0;
 	}
 
-#if _WIN32 && !OLDUNREAL_WINXP
+#if XOPENGL_WGL && !OLDUNREAL_WINXP
 	if (ReduceMouseLag && !UsingDXGISwapchain)
 		InitDXGISwapchain(Viewport->PhysicalSizeX, Viewport->PhysicalSizeY);
 #endif
@@ -1368,7 +1394,7 @@ void UXOpenGLRenderDevice::UnsetRes()
 {
 	guard(UXOpenGLRenderDevice::UnsetRes);
 
-#if _WIN32
+#if XOPENGL_WGL
 	if (WasFullscreen)
 		ChangeDisplaySettingsW(NULL, 0);
 #endif
@@ -1377,7 +1403,7 @@ void UXOpenGLRenderDevice::UnsetRes()
 
 void UXOpenGLRenderDevice::SwapControl()
 {
-#if !_WIN32
+#if !XOPENGL_WGL
 	guard(SwapControl);
 	switch (UseVSync)
 	{
@@ -1581,7 +1607,7 @@ UBOOL UXOpenGLRenderDevice::Exec(const TCHAR* Cmd, FOutputDevice& Ar)
 	}
 	if (ParseCommand(&Cmd, TEXT("GetRes")))
 	{
-#if _WIN32
+#if XOPENGL_WGL
 		TArray<FPlane> Relevant;
 		INT i;
 		for (i = 0; i< SupportedDisplayModes.Num(); i++)
@@ -1662,7 +1688,7 @@ void UXOpenGLRenderDevice::SetSceneNode(FSceneNode* Frame)
 		UpdateCoords(Frame);
 #endif
 	if (StoredGamma != GetViewportGamma(Viewport) || StoredOneXBlending != OneXBlending || StoredActorXBlending != ActorXBlending
-#if _WIN32 && !OLDUNREAL_WINXP
+#if XOPENGL_WGL && !OLDUNREAL_WINXP
 		|| StoredUsingDXGISwapchain != UsingDXGISwapchain
 #endif
 		)
@@ -1765,7 +1791,7 @@ void UXOpenGLRenderDevice::SetFrameStateUniforms()
 	FrameState->Gamma = StoredGamma;
 	FrameState->LightColorIntensity = ActorXBlending ? 1.f : 1.5f;
 	FrameState->LightMapIntensity = OneXBlending ? 2.f : 4.f;
-#if _WIN32 && !OLDUNREAL_WINXP
+#if XOPENGL_WGL && !OLDUNREAL_WINXP
 	// The DXGI interop backbuffer is read back by D3D with a top-down (D3D) row order,
 	// while we rendered into it with GL's bottom-up convention, so the post-process pass
 	// needs to flip vertically to compensate (mirrors AntiDrv's YScale trick).
@@ -2107,7 +2133,7 @@ void UXOpenGLRenderDevice::ResolveSceneColor()
 	DXGI low-latency swapchain (WGL_NV_DX_interop) - ReduceMouseLag.
 -----------------------------------------------------------------------------*/
 
-#if _WIN32 && !OLDUNREAL_WINXP
+#if XOPENGL_WGL && !OLDUNREAL_WINXP
 
 bool UXOpenGLRenderDevice::CreateDXGIFramebuffer(
 	INT             Width,
@@ -2583,7 +2609,7 @@ void UXOpenGLRenderDevice::BeginUI(FSceneNode* Frame)
 }
 
 
-#ifndef _WIN32
+#if !XOPENGL_WGL
 /*-----------------------------------------------------------------------------
 	HP2 end-of-frame capture.
 	When HP2_CAPTURE_FRAMES names a directory, every presented frame is read
@@ -2669,7 +2695,11 @@ namespace
 		if (const char* Ticks = HPCaptureEnv("HP2_CAPTURE_TICKS"))
 			GFrameCapture.RequestedTicks = atoi(Ticks);
 		// Best effort; the harness normally pre-creates the directory.
+#if defined(_WIN32)
+		_mkdir(GFrameCapture.Directory.c_str());
+#else
 		mkdir(GFrameCapture.Directory.c_str(), 0775);
+#endif
 		GFrameCapture.Enabled = true;
 		debugf(NAME_Init, TEXT("XOpenGL: frame capture enabled in %ls"), appFromAnsi(GFrameCapture.Directory.c_str()));
 	}
@@ -2771,7 +2801,7 @@ void UXOpenGLRenderDevice::Unlock(UBOOL Blit)
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
 		if (Blit)
 		{
-#if _WIN32 && !OLDUNREAL_WINXP
+#if XOPENGL_WGL && !OLDUNREAL_WINXP
 			if (UsingDXGISwapchain)
 			{
 				ResizeDXGISwapchain(Viewport->PhysicalSizeX, Viewport->PhysicalSizeY);
@@ -2781,13 +2811,13 @@ void UXOpenGLRenderDevice::Unlock(UBOOL Blit)
 #endif
 
 			SetProgram(PostProcess_Prog);
-#if _WIN32 && !OLDUNREAL_WINXP
+#if XOPENGL_WGL && !OLDUNREAL_WINXP
 			if (UsingDXGISwapchain)
 				glBindFramebuffer(GL_FRAMEBUFFER, DXGIFramebuffer);
 #endif
 			INT PresentWidth = Viewport->SizeX;
 			INT PresentHeight = Viewport->SizeY;
-#if !defined(_WIN32)
+#if !XOPENGL_WGL
 			SDL_GL_GetDrawableSize(Window, &PresentWidth, &PresentHeight);
 #endif
 			CachedPhysicalSizeX = PresentWidth;
@@ -2795,13 +2825,13 @@ void UXOpenGLRenderDevice::Unlock(UBOOL Blit)
 			static_cast<PostProcessProgram*>(Shaders[PostProcess_Prog])->Draw(PresentTexture, PresentWidth, PresentHeight);
 			SetProgram(No_Prog);
 			glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-#ifndef _WIN32
+#if !XOPENGL_WGL
 			// End-of-frame capture: present-prep is done and the default
 			// framebuffer holds the finished frame; run before the swap.
 			HPCapturePresentedFrame(Window, PresentWidth, PresentHeight);
 #endif
 
-#if !_WIN32
+#if !XOPENGL_WGL
 			SDL_GL_SwapWindow(Window);
 #elif !OLDUNREAL_WINXP
 			if (UsingDXGISwapchain)
@@ -3102,7 +3132,7 @@ void UXOpenGLRenderDevice::Exit()
 
 	DestroyUICompositeFBO();
 	DestroyRenderFBO();
-#if _WIN32 && !OLDUNREAL_WINXP
+#if XOPENGL_WGL && !OLDUNREAL_WINXP
 	DestroyDXGISwapchain();
 #endif
 
@@ -3115,7 +3145,7 @@ void UXOpenGLRenderDevice::Exit()
 	EditorStateBuffer.DeleteBuffer();
 	DistanceFogBuffer.DeleteBuffer();
 	
-#if !_WIN32
+#if !XOPENGL_WGL
 	CurrentGLContext = NULL;
 
 	XOpenGLMakeCurrent(Window, NULL);
@@ -3149,7 +3179,7 @@ void UXOpenGLRenderDevice::Exit()
 	NumDevices--;
 #endif
 
-#if _WIN32 && !UNREAL_OLDUNREAL && !UNREAL_TOURNAMENT_OLDUNREAL
+#if XOPENGL_WGL && !UNREAL_OLDUNREAL && !UNREAL_TOURNAMENT_OLDUNREAL
 	TimerEnd();
 #endif
 
@@ -3168,7 +3198,7 @@ void UXOpenGLRenderDevice::Exit()
 	GConfig->SetString(TEXT("XOpenGLDrv.XOpenGLRenderDevice"), TEXT("UseBindlessTextures"), *FString::Printf(TEXT("%ls"), *GetTrueFalse(UseBindlessTextures)));
 	GConfig->SetString(TEXT("XOpenGLDrv.XOpenGLRenderDevice"), TEXT("UseShaderDrawParameters"), *FString::Printf(TEXT("%ls"), *GetTrueFalse(UseShaderDrawParameters)));
 	GConfig->SetString(TEXT("XOpenGLDrv.XOpenGLRenderDevice"), TEXT("UseShaderCache"), *FString::Printf(TEXT("%ls"), *GetTrueFalse(UseShaderCache)));
-#if _WIN32
+#if XOPENGL_WGL
 	GConfig->SetString(TEXT("XOpenGLDrv.XOpenGLRenderDevice"), TEXT("ReduceMouseLag"), *FString::Printf(TEXT("%ls"), *GetTrueFalse(ReduceMouseLag)));
 #endif
 	GConfig->SetString(TEXT("XOpenGLDrv.XOpenGLRenderDevice"), TEXT("UsePersistentBuffers"), *FString::Printf(TEXT("%ls"), *GetTrueFalse(UsePersistentBuffers)));
@@ -3232,7 +3262,7 @@ void UXOpenGLRenderDevice::ShutdownAfterError()
 	}
 #endif
 
-	#if !_WIN32
+#if !XOPENGL_WGL
 		CurrentGLContext = NULL;
 	# if !UNREAL_TOURNAMENT_OLDUNREAL
 		XOpenGLDestroyContext(glContext);
@@ -3255,7 +3285,7 @@ void UXOpenGLRenderDevice::ShutdownAfterError()
 
 #endif
 
-#if _WIN32 && !UNREAL_OLDUNREAL && !UNREAL_TOURNAMENT_OLDUNREAL
+#if XOPENGL_WGL && !UNREAL_OLDUNREAL && !UNREAL_TOURNAMENT_OLDUNREAL
 	TimerEnd();
 #endif
 
@@ -3398,7 +3428,7 @@ void UXOpenGLRenderDevice::DrawStats(FSceneNode* Frame)
 }
 
 // Static variables.
-#if !_WIN32
+#if !XOPENGL_WGL
 SDL_GLContext		UXOpenGLRenderDevice::CurrentGLContext = NULL;
 TArray<SDL_GLContext> UXOpenGLRenderDevice::AllContexts;
 #else

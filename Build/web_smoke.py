@@ -5,14 +5,14 @@ Emits a report-schema-v1 JSON document:
     {schema: 1, name, status: pass|fail|blocked, invariant, reason_code?,
      data: {profile}, artifacts: [{kind, path}], command, exit_reason, page?}
 
-Two modes, both running the real staged directory in ``dist/web-wasm64``:
-
 - ``shell`` serves only the staged page and waits for it to report that the
-  wasm64 module instantiated with IDBFS mounted. Data profile ``data-none``:
-  the page is served without a game data root, so nothing imports.
-- ``boot`` additionally serves a prototype data root under ``/dev-data/`` and
-  waits for the engine to enter its main loop and render 300 frames. Data
-  profile ``data-prototype``.
+  wasm64 module instantiated with IDBFS mounted. Data profile ``data-none``.
+- ``boot`` additionally serves prototype data under ``/dev-data/`` and waits
+  for the engine to enter its main loop and render 300 frames. Data profile
+  ``data-prototype``.
+- ``launcher`` loads the browser launcher with no game data, waits for its
+  first rendered SDL/ImGui frame, and stores a canvas PNG. Data profile
+  ``data-none``.
 
 The page POSTs one JSON document to ``/__hp2_smoke`` (a route this harness
 adds to the same handler ``Build/serve_web.py`` uses, so the served page sees
@@ -23,10 +23,13 @@ the same COOP/COEP headers as a real session). Exit codes: 0 pass, 1 fail,
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import json
 import os
 import pwd
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -48,7 +51,7 @@ EXIT_PASS = 0
 EXIT_FAIL = 1
 EXIT_BLOCKED = 2
 
-DEFAULT_TIMEOUT = {"shell": 120, "boot": 900}
+DEFAULT_TIMEOUT = {"shell": 120, "boot": 900, "launcher": 120}
 
 INVARIANTS = {
     "shell": (
@@ -58,6 +61,9 @@ INVARIANTS = {
     "boot": (
         "the staged page imports prototype data, enters the engine main loop, "
         "and runs 300 frames"
+    ),
+    "launcher": (
+        "the page opens the in-engine launcher and captures its first rendered frame"
     ),
 }
 
@@ -79,7 +85,7 @@ def real_home() -> str | None:
 _BROWSER_HOME = real_home()
 
 # The stage a mode must reach to pass, mirroring the page's reportSmoke calls.
-PASS_STAGE = {"shell": "ready", "boot": "running"}
+PASS_STAGE = {"shell": "ready", "boot": "running", "launcher": "ready"}
 
 MACOS_BROWSERS = (
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -178,6 +184,7 @@ def run_smoke(
     chrome: str,
     timeout: float,
     map_name: str,
+    settings: list[str],
 ) -> dict[str, Any] | None:
     """Serve the staged build, open it in headless Chrome, wait for one POST."""
     received: dict[str, Any] = {"payload": None, "event": threading.Event()}
@@ -187,7 +194,7 @@ def run_smoke(
     thread.start()
     port = server.server_address[1]
     profile_dir = tempfile.mkdtemp(prefix="hp2-web-smoke-")
-    url = page_url(port, mode, map_name)
+    url = page_url(port, mode, map_name, settings)
     # Chrome gets a private profile directory, and the real home directory
     # rather than the isolated test HOME (see _BROWSER_HOME).
     environment = dict(os.environ)
@@ -200,6 +207,13 @@ def run_smoke(
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-extensions",
+            # A headless window is never the foreground window as far as the
+            # page is concerned, so without these the unfocused-tab clamp
+            # (about 1 Hz, or 10 Hz on some builds) lands on the measurement
+            # and no frame rate reading means anything.
+            "--disable-background-timer-throttling",
+            "--disable-renderer-backgrounding",
+            "--disable-backgrounding-occluded-windows",
             "--user-data-dir=" + profile_dir,
             url,
         ],
@@ -221,11 +235,39 @@ def run_smoke(
         shutil.rmtree(profile_dir, ignore_errors=True)
     return received["payload"]
 
+def store_launcher_screenshot(payload: dict[str, Any]) -> str | None:
+    data_url = payload.pop("screenshot", None)
+    if not isinstance(data_url, str):
+        return "the page did not provide a canvas screenshot"
+    prefix, separator, encoded = data_url.partition(",")
+    if prefix != "data:image/png;base64" or not separator:
+        return "the page returned an invalid PNG data URL"
+    try:
+        image = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error) as error:
+        return f"could not decode the canvas screenshot: {error}"
+    if not image.startswith(b"\x89PNG\r\n\x1a\n") or len(image) < 24:
+        return "the canvas screenshot is not a valid PNG"
+    output = artifact_dir()
+    if output is None:
+        return "HP2_ARTIFACT_DIR is not set"
+    output.mkdir(parents=True, exist_ok=True)
+    path = output / "web-launcher.png"
+    path.write_bytes(image)
+    payload["screenshot_path"] = str(path)
+    return None
 
-def page_url(port: int, mode: str, map_name: str) -> str:
-    """The URL under test. shell imports nothing; boot drives the dev import."""
+
+def page_url(port: int, mode: str, map_name: str, settings: list[str]) -> str:
+    """The URL under test for the selected browser mode."""
     if mode == "boot":
-        return f"http://127.0.0.1:{port}/?smoke=boot&devdata&map={quote(map_name)}"
+        overrides = "".join(f"&set={quote(s)}" for s in settings)
+        return (
+            f"http://127.0.0.1:{port}/?smoke=boot&devdata&map={quote(map_name)}"
+            f"{overrides}"
+        )
+    if mode == "launcher":
+        return f"http://127.0.0.1:{port}/?smoke=launcher"
     return f"http://127.0.0.1:{port}/?smoke=shell"
 
 
@@ -235,6 +277,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root", type=Path, default=Path("dist/web-wasm64"))
     parser.add_argument("--data-root", type=Path, default=None, help="required for --mode=boot")
     parser.add_argument("--map", default="PrivetDr.unr", help="map to launch in boot mode")
+    parser.add_argument(
+        "--setting",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="boot mode: override one launcher setting for this run",
+    )
     parser.add_argument("--chrome", default=None, help="explicit Chrome/Chromium binary")
     parser.add_argument("--timeout", type=float, default=None)
     parser.add_argument("--output", type=Path, default=None)
@@ -274,12 +323,20 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     timeout = args.timeout if args.timeout is not None else DEFAULT_TIMEOUT[mode]
-    payload = run_smoke(mode, root, data_root, chrome, timeout, args.map)
+    payload = run_smoke(mode, root, data_root, chrome, timeout, args.map, args.setting)
     if payload is None:
         report["reason_code"] = "web_smoke.timeout"
         report["exit_reason"] = f"the page reported nothing within {timeout:g}s"
         write_report(report, args.output)
         return EXIT_FAIL
+    screenshot_path: str | None = None
+    if mode == "launcher":
+        screenshot_error = store_launcher_screenshot(payload)
+        if screenshot_error:
+            payload["stage"] = "failed"
+            payload["detail"] = screenshot_error
+        else:
+            screenshot_path = payload.get("screenshot_path")
 
     page = {key: value for key, value in payload.items() if key != "log"}
     report["page"] = page
@@ -290,6 +347,8 @@ def main(argv: list[str] | None = None) -> int:
         log_path = root_artifacts / f"{report['name']}.log"
         log_path.write_text(log_text + ("\n" if log_text and not log_text.endswith("\n") else ""))
         report["artifacts"].append({"kind": "log", "path": str(log_path)})
+    if screenshot_path:
+        report["artifacts"].append({"kind": "screenshot", "path": screenshot_path})
 
     stage = payload.get("stage")
     if stage == PASS_STAGE[mode]:

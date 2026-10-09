@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 import re
 import sys
 from pathlib import Path
@@ -27,6 +28,8 @@ DEFAULT_APP_BUNDLE = (
     Path("dist/macos-arm64/HarryPotter2.app")
     if sys.platform == "darwin"
     else Path("dist/linux-arm64/bin/hp2_game")
+    if platform.machine() in ("aarch64", "arm64")
+    else Path("dist/linux-x64/bin/hp2_game")
 )
 DEFAULT_RETAIL_DATA_DIR = Path("out/retail-data")
 OVERLAY_MANIFEST_NAME = "overlay-manifest.json"
@@ -152,9 +155,21 @@ def read_build_facts(build_dir: Path) -> dict[str, object]:
         missing.append("CMAKE_CXX_COMPILER_ID (CMakeFiles/*/CMakeCXXCompiler.cmake)")
     if not cxx_compiler:
         missing.append("CMAKE_CXX_COMPILER (CMakeCache.txt or CMakeCXXCompiler.cmake)")
-    # A wasm build has no macOS deployment target to record: the host OS is
-    # not the target OS, so requiring the cache entry is wrong there.
-    if sys.platform == "darwin" and not is_web and deployment_target is None:
+    # Deployment target is required only when the configured target is macOS.
+    # A macOS host can cross-configure Windows without an OSX deployment value.
+    target_system = cache.get("CMAKE_SYSTEM_NAME")
+    if target_system is None:
+        for system_file in sorted(build_dir.glob("CMakeFiles/*/CMakeSystem.cmake")):
+            try:
+                system_text = system_file.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            match = re.search(r'set\(CMAKE_SYSTEM_NAME\s+"?([^"\)\s]+)"?\)', system_text)
+            if match:
+                target_system = match.group(1)
+                break
+    is_macos_target = sys.platform == "darwin" and target_system in (None, "", "Darwin") and not is_web
+    if is_macos_target and deployment_target is None:
         missing.append("CMAKE_OSX_DEPLOYMENT_TARGET (CMakeCache.txt)")
     if missing:
         raise StateError(

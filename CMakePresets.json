@@ -173,6 +173,73 @@
       }
     },
     {
+      "name": "linux-x64-base",
+      "hidden": true,
+      "generator": "Unix Makefiles",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_POLICY_VERSION_MINIMUM": "3.5",
+        "HP2_REQUIRE_IMPLEMENTED_SOURCES": "ON"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "linux-x64",
+      "displayName": "Linux x86_64 Release",
+      "inherits": "linux-x64-base",
+      "binaryDir": "${sourceDir}/out/linux-x64",
+      "installDir": "${sourceDir}/out/install/linux-x64",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/linux-x64",
+        "HP2_ENABLE_ASAN_UBSAN": "OFF",
+        "HP2_ENABLE_TSAN": "OFF"
+      }
+    },
+    {
+      "name": "linux-x64-asan-ubsan",
+      "displayName": "Linux x86_64 ASan+UBSan",
+      "inherits": "linux-x64-base",
+      "binaryDir": "${sourceDir}/out/linux-x64-asan-ubsan",
+      "installDir": "${sourceDir}/out/install/linux-x64-asan-ubsan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/linux-x64-asan-ubsan",
+        "HP2_ENABLE_ASAN_UBSAN": "ON",
+        "HP2_ENABLE_TSAN": "OFF"
+      }
+    },
+    {
+      "name": "linux-x64-retail",
+      "displayName": "Linux x86_64 Release + retail-only test data",
+      "inherits": "linux-x64-base",
+      "binaryDir": "${sourceDir}/out/linux-x64-retail",
+      "installDir": "${sourceDir}/out/install/linux-x64-retail",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/linux-x64-retail",
+        "HP2_ENABLE_ASAN_UBSAN": "OFF",
+        "HP2_ENABLE_TSAN": "OFF",
+        "HP2_TEST_DATA_ROOT": "$env{XDG_DATA_HOME}/harry-potter-2/Data/Retail"
+      }
+    },
+    {
+      "name": "windows-x64",
+      "displayName": "Windows x64 Release (llvm-mingw UCRT)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/windows-x64",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/Build/CMake/Toolchains/llvm-mingw-x86_64.cmake",
+        "CMAKE_BUILD_TYPE": "Release",
+        "HP2_REQUIRE_IMPLEMENTED_SOURCES": "ON"
+      }
+    },
+    {
       "name": "web-wasm64",
       "displayName": "WebAssembly (wasm64) + WebGL2, Chrome/Firefox",
       "generator": "Ninja",
@@ -234,6 +301,22 @@
       "configurePreset": "linux-arm64-retail"
     },
     {
+      "name": "linux-x64",
+      "configurePreset": "linux-x64"
+    },
+    {
+      "name": "linux-x64-asan-ubsan",
+      "configurePreset": "linux-x64-asan-ubsan"
+    },
+    {
+      "name": "linux-x64-retail",
+      "configurePreset": "linux-x64-retail"
+    },
+    {
+      "name": "windows-x64",
+      "configurePreset": "windows-x64"
+    },
+    {
       "name": "web-wasm64",
       "configurePreset": "web-wasm64",
       "targets": [
@@ -260,6 +343,27 @@
       "name": "macos-arm64-tsan",
       "displayName": "macOS 15 arm64 TSan tests",
       "configurePreset": "macos-arm64-tsan",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error" }
+    },
+    {
+      "name": "linux-x64",
+      "displayName": "Linux x86_64 Release tests",
+      "configurePreset": "linux-x64",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error" }
+    },
+    {
+      "name": "linux-x64-asan-ubsan",
+      "displayName": "Linux x86_64 ASan+UBSan tests",
+      "configurePreset": "linux-x64-asan-ubsan",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error" }
+    },
+    {
+      "name": "linux-x64-retail",
+      "displayName": "Linux x86_64 retail-only tests",
+      "configurePreset": "linux-x64-retail",
       "output": { "outputOnFailure": true },
       "execution": { "noTestsAction": "error" }
     },
@@ -316,6 +420,18 @@
       "name": "linux-arm64-retail",
       "displayName": "Linux arm64 retail-only tests",
       "configurePreset": "linux-arm64-retail",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error" }
+    },
+    {
+      "name": "windows-x64",
+      "displayName": "Windows x64 Release tests",
+      "configurePreset": "windows-x64",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
       "output": { "outputOnFailure": true },
       "execution": { "noTestsAction": "error" }
     },

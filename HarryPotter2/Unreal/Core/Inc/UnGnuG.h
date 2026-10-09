@@ -12,11 +12,35 @@
 #include <cwchar>
 #include <cstring>
 #include <cstdarg>
-#if defined(__APPLE__) || defined(__linux__) || defined(__EMSCRIPTEN__)
+#if defined(_WIN32)
+	#include <malloc.h>
+#elif defined(__APPLE__) || defined(__linux__) || defined(__EMSCRIPTEN__)
 	#include <alloca.h>
 #endif
+#if defined(__APPLE__)
+	#include <TargetConditionals.h>
+#endif
 
-#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))
+
+#if defined(__ANDROID__)
+	#error Android is not supported yet.
+#elif defined(__APPLE__) && TARGET_OS_IPHONE
+	#error iOS/iPadOS is not supported yet.
+#elif defined(_WIN32) && defined(__x86_64__) && defined(__MINGW32__)
+	#define HP2_WINDOWS 1
+	#define __X86_64__ 1
+	#define HP2_HOST_WCHAR_TCHAR 1
+	#define __INTEL_BYTE_ORDER__ 1
+	#undef ASM
+	#undef ASM3DNOW
+	#undef ASMKNI
+	#undef ASMLINUX
+	#define ASM 0
+	#define ASM3DNOW 0
+	#define ASMKNI 0
+	#define ASMLINUX 0
+	#define COMPILER "Compiled with llvm-mingw Clang (" __clang_version__ ")"
+#elif defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))
 	#ifndef __UNIX__
 		#define __UNIX__ 1
 	#endif
@@ -46,6 +70,26 @@
 	#define HP2_HOST_WCHAR_TCHAR 1
 	#if !defined(__BYTE_ORDER__) || __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
 		#error Linux aarch64 builds require little-endian byte order.
+	#endif
+	#undef ASM
+	#undef ASM3DNOW
+	#undef ASMKNI
+	#undef ASMLINUX
+	#define ASM 0
+	#define ASM3DNOW 0
+	#define ASMKNI 0
+	#define ASMLINUX 0
+	#define COMPILER "Compiled with GNU/Clang (" __VERSION__ ")"
+#elif defined(__linux__) && defined(__x86_64__)
+	#ifndef __UNIX__
+		#define __UNIX__ 1
+	#endif
+	#define __LINUX__ 1
+	#define __X86_64__ 1
+	#define __INTEL_BYTE_ORDER__ 1
+	#define HP2_HOST_WCHAR_TCHAR 1
+	#if !defined(__BYTE_ORDER__) || __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
+		#error Linux x86_64 builds require little-endian byte order.
 	#endif
 	#undef ASM
 	#undef ASM3DNOW
@@ -100,7 +144,9 @@
 #endif
 
 // Stack control.
-#include <sys/wait.h>
+#if __UNIX__
+	#include <sys/wait.h>
+#endif
 #include <signal.h>
 #include <setjmp.h>
 class __Context
@@ -113,6 +159,7 @@ public:
 
 protected:
 	static void HandleSignal( int Sig );
+#if __UNIX__
 	static struct sigaction Act_SIGHUP;
 	static struct sigaction Act_SIGQUIT;
 	static struct sigaction Act_SIGILL;
@@ -122,6 +169,7 @@ protected:
 	static struct sigaction Act_SIGFPE;
 	static struct sigaction Act_SIGSEGV;
 	static struct sigaction Act_SIGTERM;
+#endif
 	jmp_buf Last;
 };
 
@@ -144,9 +192,15 @@ protected:
 #undef CDECL
 
 // Opaque operating-system handles always retain host pointer width.
+#if defined(_WIN32)
+typedef void* HANDLE;
+typedef struct HINSTANCE__* HINSTANCE;
+typedef struct HINSTANCE__* HMODULE;
+#else
 typedef void* HANDLE;
 typedef void* HINSTANCE;
 typedef void* HMODULE;
+#endif
 
 // Sizes.
 enum {DEFAULT_ALIGNMENT = 16}; // Default boundary to align memory allocations on.
@@ -168,7 +222,11 @@ enum {CACHE_LINE_SIZE   = 32}; // Cache line size.
 #define VARARGS
 #define CDECL
 #define STDCALL
+#if defined(_WIN32)
+#define FORCEINLINE inline
+#else
 #define FORCEINLINE /* Force code to be inline */
+#endif
 #define ZEROARRAY 0 /* Zero-length arrays in structs */
 #define __cdecl
 
@@ -434,7 +492,11 @@ Overflow:
 // Unsigned base types.
 typedef std::uint8_t		BYTE;		// 8-bit  unsigned.
 typedef std::uint16_t		_WORD;		// 16-bit unsigned.
+#if defined(_WIN32)
+typedef unsigned long		DWORD;
+#else
 typedef std::uint32_t		DWORD;		// 32-bit unsigned.
+#endif
 typedef std::uint64_t		QWORD;		// 64-bit unsigned.
 #if defined(__SIZEOF_INT128__)
 typedef unsigned __int128	OWORD;
@@ -444,7 +506,11 @@ typedef unsigned __int128	OWORD;
 typedef std::int8_t			SBYTE;		// 8-bit  signed.
 typedef std::int16_t		SWORD;		// 16-bit signed.
 typedef std::int32_t		INT;		// 32-bit signed.
+#if defined(_WIN32)
+typedef long				LONG;
+#else
 typedef std::int32_t		LONG;		// Windows-compatible 32-bit signed long.
+#endif
 typedef std::int64_t		SQWORD;		// 64-bit signed.
 
 // Host pointer and size types.
@@ -486,8 +552,12 @@ static_assert(sizeof(HANDLE) == sizeof(void*), "HANDLE must retain host pointer 
 static_assert(sizeof(HINSTANCE) == sizeof(void*), "HINSTANCE must retain host pointer width");
 static_assert(sizeof(HMODULE) == sizeof(void*), "HMODULE must retain host pointer width");
 #if defined(HP2_HOST_WCHAR_TCHAR)
-static_assert(sizeof(void*) == 8, "host TCHAR must use 32-bit wchar_t");
+static_assert(sizeof(void*) == 8, "host TCHAR targets require 64-bit pointers");
+#if defined(_WIN32)
+static_assert(sizeof(wchar_t) == 2, "Windows host TCHAR must use UTF-16");
+#else
 static_assert(sizeof(wchar_t) == 4, "host TCHAR must use 32-bit wchar_t");
+#endif
 #endif
 
 // Make sure characters are unsigned.
@@ -504,10 +574,13 @@ static_assert(sizeof(wchar_t) == 4, "host TCHAR must use 32-bit wchar_t");
 #define LINE_TERMINATOR TEXT("\n")
 #define PATH_SEPARATOR TEXT("/")
 #define DLLEXT TEXT(".so")
+#elif HP2_WINDOWS
+#define LINE_TERMINATOR TEXT("\n")
+#define PATH_SEPARATOR TEXT("/")
+#define DLLEXT TEXT(".dll")
 #else
 #define LINE_TERMINATOR TEXT("\r\n")
 #define PATH_SEPARATOR TEXT("\\")
-#define DLLEXT TEXT(".dll")
 #endif
 
 // NULL.

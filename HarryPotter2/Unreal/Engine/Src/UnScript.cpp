@@ -2888,7 +2888,7 @@ void AActor::execLoadGameSaveInfo( FFrame& Stack, RESULT_DECL )
 	unguardSlow;
 }
 
-#if defined(_WIN32) || defined(WIN32)
+#if _MSC_VER
 CORE_API bool IsOSVer2kOrXP ();
 #else
 CORE_API bool IsOSVer2kOrXP()

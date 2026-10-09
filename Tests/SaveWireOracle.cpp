@@ -16,7 +16,7 @@
 
 #include "Core.h"
 #include "FMallocAnsi.h"
-#include "FFileManagerUnix.h"
+#include "FFileManagerPlatformHP2.h"
 #include "UnLinker.h"
 
 extern "C" { TCHAR GPackage[64] = TEXT("SaveWireOracle"); }
@@ -81,7 +81,7 @@ namespace
 int main()
 {
 	FMallocAnsi Allocator;
-	FFileManagerUnix FileManager;
+	FFileManagerPlatformHP2 FileManager;
 	GMalloc = &Allocator;
 	GFileManager = &FileManager;
 

@@ -1,5 +1,5 @@
 /*=============================================================================
-	NativeTextFreeTypeEmscripten.cpp: font resolution for the wasm build.
+	NativeTextFontSeamEmscripten.cpp: font resolution for the wasm build.
 
 	The FreeType provider needs Fontconfig for exactly two things: turn a
 	family name into a font file, and pick a different file when a code point
@@ -33,7 +33,7 @@
 #include "NativeText.h"
 
 #if !defined(__EMSCRIPTEN__)
-#error NativeTextFreeTypeEmscripten.cpp is only for the Emscripten build.
+#error NativeTextFontSeamEmscripten.cpp is only for the Emscripten build.
 #endif
 
 #include <emscripten/emscripten.h>
@@ -47,7 +47,7 @@
 #include <string>
 #include <vector>
 
-namespace Hp2NativeTextEmscripten
+namespace Hp2NativeTextFontSeam
 {
 	namespace
 	{

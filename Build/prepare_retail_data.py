@@ -373,6 +373,8 @@ def collect_side(root: Path, source: str) -> dict[str, SourceAsset]:
     assert system and maps and textures and sounds and music
 
     for path in sorted_direct_files(system):
+        if not is_debris(path) and path.suffix.casefold() in PROHIBITED_EXTENSIONS:
+            source_asset(source, root, path, output_path("System", PurePosixPath(path.name)))
         suffix = path.suffix.casefold()
         if suffix == ".u" or suffix in {".int", ".usa"}:
             insert_asset(

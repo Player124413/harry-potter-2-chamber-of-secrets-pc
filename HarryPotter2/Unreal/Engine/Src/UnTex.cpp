@@ -9,7 +9,7 @@
 #include "EnginePrivate.h"
 #include "UnRender.h"
 
-#ifdef WIN32
+#if _MSC_VER
 #include "UnDDraw.h"
 #include "Palette.h"
 #include "S3tc.h"
@@ -745,7 +745,7 @@ UPalette* UPalette::ReplaceWithExisting()
 
 typedef	struct {BYTE rgba[4];} COLOR;
 
-#ifdef WIN32
+#if _MSC_VER
 
 //
 // Compress the texture, with mip-levels if required

@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 #if defined(__EMSCRIPTEN__)
 #include <emscripten/emscripten.h>
@@ -20,7 +21,13 @@
 #endif
 
 #include "FConfigCacheIni.h"
+#if HP2_WINDOWS
+#include "FFileManagerWindowsHP2.h"
+using FLauncherFileManager = FFileManagerWindowsHP2;
+#else
 #include "FFileManagerUnix.h"
+using FLauncherFileManager = FFileManagerUnix;
+#endif
 #include "FMallocAnsi.h"
 #include "FOutputDeviceFile.h"
 #include "FOutputDeviceStdout.h"
@@ -29,24 +36,11 @@
 #include "FOutputDeviceSDLError.h"
 
 #include "HP2LaunchPolicy.h"
+#include "HP2Launcher.h"
+#include "HP2LauncherPlatform.h"
 #include "HP2LauncherModel.h"
 #include "HP2LauncherStore.h"
 #include "HP2CrashReporter.h"
-#if MACOSX
-#include "HP2MacLauncher.h"
-namespace HP2Launcher
-{
-	inline LaunchAction RunHP2NativeLauncher(
-		const LauncherRequest& request,
-		LauncherResult& result,
-		std::string& error)
-	{
-		return RunHP2MacLauncher(request, result, error);
-	}
-}
-#else
-#include "HP2ShellLauncher.h"
-#endif
 #include "HP2Paths.h"
 #include "HP2DataImport.h"
 #include "HP2StaticPackages.h"
@@ -66,7 +60,7 @@ FMallocAnsi Malloc;
 FOutputDeviceFile Log;
 FOutputDeviceSDLError Error;
 FFeedbackContextSDL Warn;
-FFileManagerUnix FileManager;
+FLauncherFileManager FileManager;
 
 // Optional stdout mirror installed for -log runs so harness scripts can
 // scrape progress markers from captured output.
@@ -197,265 +191,231 @@ bool ResolveSourceRoot(
 	return true;
 }
 
-// One chooser round-trip: prepares the launcher home and per-source profile,
-// shows the native chooser, persists everything it decided, and installs the
-// chosen roots for the engine. Returns false when the process must stop;
-// Outcome.RunEngine says whether the engine should start afterwards.
+struct FLauncherRound
+{
+	LauncherRequest Request;
+	std::string LauncherRoot;
+	std::string ImportDestination;
+	DataSourceConfiguration Configuration;
+	DataSource SelectedSource = DataSource::Retail;
+	std::string ProfileRoot;
+	bool HasDataRoot = false;
+	bool HasOverride = false;
+	std::string OverrideRoot;
+	bool OwnsVideo = false;
+
+	bool Prepare(int ArgC, char* ArgV[], bool bHasOverride, const std::string& InOverrideRoot)
+	{
+		(void)ArgC;
+		(void)ArgV;
+		HasOverride = bHasOverride;
+		OverrideRoot = InOverrideRoot;
+
+		std::string StepError;
+		if (!PrepareHP2LauncherHome(LauncherRoot, StepError))
+		{
+			ShowLauncherError(StepError, "Could not prepare the launcher folder.");
+			return false;
+		}
+		LoadDataSourceConfiguration(LauncherRoot, Configuration, StepError);
+		if (!HP2DataImport::GetConventionalRetailDestination(ImportDestination))
+			ImportDestination = "./Retail";
+
+		SelectedSource = Configuration.selected;
+		if (!PrepareDataSourceProfile(LauncherRoot, SelectedSource, ProfileRoot, StepError))
+		{
+			ShowLauncherError(StepError, "Could not prepare the profile for the selected data source.");
+			return false;
+		}
+
+		std::string DataRoot;
+		std::string ResolveFailure;
+		HasDataRoot = ResolveSourceRoot(
+			Configuration, SelectedSource, HasOverride, OverrideRoot, DataRoot, ResolveFailure);
+		if (!HasDataRoot && HasOverride)
+		{
+			ShowLauncherError(ResolveFailure, "The data folder given on the command line cannot be used.");
+			return false;
+		}
+
+		const LauncherPaths Paths{ProfileRoot, HasDataRoot ? DataRoot + "/System" : std::string()};
+		LauncherState State;
+		if (HasDataRoot && !LoadLauncherState(Paths, State, StepError))
+			State = LauncherState();
+
+		Request.settings = State.settings;
+		Request.saves = State.saves;
+		Request.userRoot = ProfileRoot;
+		Request.logPath = LauncherRoot + "/Launcher.log";
+		Request.dataSources = Configuration;
+		Request.hasExplicitDataRootOverride = HasOverride;
+		Request.explicitDataRoot = OverrideRoot;
+		Request.retailDataRoot = ImportDestination;
+		Request.needsGameData = !HasDataRoot;
+		if (!HasDataRoot)
+			Request.errorMessage = "No game data is installed yet. Choose a source in Game Data to get started.";
+
+		for (const DataSource OptionSource : {DataSource::Retail, DataSource::Prototype})
+		{
+			DataSourceOption Option;
+			Option.source = OptionSource;
+			std::string OptionRoot;
+			std::string OptionFailure;
+			if (ResolveSourceRoot(Configuration, OptionSource,
+				HasOverride && OptionSource == SelectedSource, OverrideRoot, OptionRoot, OptionFailure))
+			{
+				Option.available = true;
+				Option.root = OptionRoot;
+			}
+			else Option.error = OptionFailure;
+			Request.dataSourceOptions.push_back(std::move(Option));
+		}
+
+		const auto AddMode = [this](int Width, int Height)
+		{
+			if (Width <= 0 || Height <= 0) return;
+			for (const DisplayResolution& Existing : Request.displayModes)
+				if (Existing.width == Width && Existing.height == Height) return;
+			char Label[64];
+			std::snprintf(Label, sizeof(Label), "%d \xC3\x97 %d", Width, Height);
+			Request.displayModes.push_back({Width, Height, Label});
+		};
+
+		const LauncherCapabilities Capabilities = HP2LauncherPlatform::CurrentCapabilities();
+		if (Capabilities.resolutions)
+		{
+#if MACOSX
+			SDL_SetHint(SDL_HINT_VIDEODRIVER, "cocoa");
+#elif defined(__linux__)
+			SDL_SetHint(SDL_HINT_VIDEODRIVER, "wayland,x11");
+#endif
+			if (!(SDL_WasInit(SDL_INIT_VIDEO) & SDL_INIT_VIDEO))
+			{
+				if (SDL_InitSubSystem(SDL_INIT_VIDEO) == 0) OwnsVideo = true;
+			}
+			const int ModeCount = SDL_GetNumDisplayModes(0);
+			for (int Index = 0; Index < ModeCount; ++Index)
+			{
+				SDL_DisplayMode Mode{};
+				if (SDL_GetDisplayMode(0, Index, &Mode) == 0) AddMode(Mode.w, Mode.h);
+			}
+		}
+
+		const DisplayResolution StandardModes[] = {
+			{640, 480, "640 \xC3\x97 480"}, {800, 600, "800 \xC3\x97 600"},
+			{1024, 768, "1024 \xC3\x97 768"}, {1280, 720, "1280 \xC3\x97 720"},
+			{1280, 800, "1280 \xC3\x97 800"}, {1366, 768, "1366 \xC3\x97 768"},
+			{1440, 900, "1440 \xC3\x97 900"}, {1600, 900, "1600 \xC3\x97 900"},
+			{1680, 1050, "1680 \xC3\x97 1050"}, {1920, 1080, "1920 \xC3\x97 1080"},
+			{1920, 1200, "1920 \xC3\x97 1200"}, {2560, 1440, "2560 \xC3\x97 1440"},
+			{2560, 1600, "2560 \xC3\x97 1600"}, {3456, 2234, "3456 \xC3\x97 2234"},
+		};
+		for (const DisplayResolution& Mode : StandardModes) AddMode(Mode.width, Mode.height);
+		AddMode(Request.settings.resolution.width, Request.settings.resolution.height);
+		return true;
+	}
+
+	void ReleaseVideo()
+	{
+		if (OwnsVideo)
+		{
+			SDL_QuitSubSystem(SDL_INIT_VIDEO);
+			OwnsVideo = false;
+		}
+	}
+
+	bool Finish(const LauncherResult& Result, LauncherFlowResult& Outcome)
+	{
+		Outcome = LauncherFlowResult();
+		const LaunchAction Action = Result.selection.action;
+		std::string StepError;
+		if (Action == LaunchAction::Error)
+		{
+			ShowLauncherError(StepError, "The launcher reported an error.");
+			return false;
+		}
+		if (Action == LaunchAction::Quit) return false;
+
+		if (!CommitDataSourceConfiguration(LauncherRoot, Result.dataSources, StepError)
+			|| !CommitLaunchSelection(LauncherRoot, Result.selection, StepError))
+		{
+			ShowLauncherError(StepError, "Could not save the launcher selection.");
+			return false;
+		}
+
+		const DataSource FinalSource = Result.dataSources.selected;
+		if (FinalSource != SelectedSource
+			&& !PrepareDataSourceProfile(LauncherRoot, FinalSource, ProfileRoot, StepError))
+		{
+			ShowLauncherError(StepError, "Could not prepare the newly selected data source.");
+			return false;
+		}
+
+		std::string FinalDataRoot;
+		std::string FinalFailure;
+		if (!ResolveSourceRoot(Result.dataSources, FinalSource, HasOverride,
+			OverrideRoot, FinalDataRoot, FinalFailure))
+		{
+			ShowLauncherError(FinalFailure, "The selected data source has no usable game data.");
+			return false;
+		}
+
+		if (!ValidateLauncherSettings(Result.settings, StepError))
+		{
+			ShowLauncherError(StepError, "The selected settings are invalid.");
+			return false;
+		}
+		const LauncherPaths FinalPaths{ProfileRoot, FinalDataRoot + "/System"};
+		if (!CommitLauncherSettings(FinalPaths, Result.settings, StepError))
+		{
+			ShowLauncherError(StepError, "Could not save the selected settings.");
+			return false;
+		}
+		if (!InstallHP2Paths(FinalDataRoot, ProfileRoot, StepError))
+		{
+			ShowLauncherError(StepError, "Could not install the selected paths.");
+			return false;
+		}
+
+		std::string PrefixUtf8;
+		if (!BuildSelectedCommand(Result.selection, PrefixUtf8, StepError))
+		{
+			ShowLauncherError(StepError, "The launcher selection cannot be started.");
+			return false;
+		}
+		if (PrefixUtf8.empty()) return false;
+
+		TCHAR Prefix[1024];
+		if (!appFromUtf8InPlace(Prefix, PrefixUtf8.c_str(), ARRAY_COUNT(Prefix)))
+		{
+			ShowLauncherError(PrefixUtf8, "The launch command is invalid.");
+			return false;
+		}
+		Outcome.RunEngine = true;
+		Outcome.EnginePrefix = Prefix;
+		return true;
+	}
+};
+
 bool RunNativeLauncherRound(
 	int ArgC,
 	char* ArgV[],
 	bool HasOverride,
 	const std::string& OverrideRoot,
-	LauncherFlowResult& Outcome )
+	LauncherFlowResult& Outcome)
 {
-	Outcome = LauncherFlowResult();
-
-	std::string LauncherRoot;
-	std::string StepError;
-	if( !PrepareHP2LauncherHome( LauncherRoot, StepError ) )
-	{
-		ShowLauncherError( StepError, "Could not prepare the launcher folder." );
-		return false;
-	}
-
-	DataSourceConfiguration Configuration;
-	LoadDataSourceConfiguration( LauncherRoot, Configuration, StepError );
-
-	// Resolved from the packaged resources (or the checkout) rather than
-	// assumed, so a build without the bundled importer degrades to a hidden
-	// button instead of a button that always fails.
-	const HP2DataImport::Toolchain ImportTool = HP2DataImport::ResolveToolchain( ArgC > 0 ? ArgV[0] : "" );
-	std::string ImportDestination;
-	if( !HP2DataImport::GetConventionalRetailDestination( ImportDestination ) )
-		ImportDestination = "./Retail";
-
-	const DataSource SelectedSource = Configuration.selected;
-	std::string ProfileRoot;
-	if( !PrepareDataSourceProfile( LauncherRoot, SelectedSource, ProfileRoot, StepError ) )
-	{
-		ShowLauncherError( StepError, "Could not prepare the profile for the selected data source." );
-		return false;
-	}
-
-	// With no game data installed yet this is the expected first-run state, not
-	// an error: the chooser still opens so the player can import. Only an
-	// explicitly overridden root that turns out unusable is fatal here.
-	std::string DataRoot;
-	std::string ResolveFailure;
-	const bool HasDataRoot = ResolveSourceRoot(
-		Configuration, SelectedSource, HasOverride, OverrideRoot, DataRoot, ResolveFailure );
-	if( !HasDataRoot && HasOverride )
-	{
-		ShowLauncherError( ResolveFailure, "The data folder given on the command line cannot be used." );
-		return false;
-	}
-
-	const LauncherPaths Paths{ ProfileRoot, HasDataRoot ? DataRoot + "/System" : std::string() };
-	LauncherState State;
-	if( HasDataRoot && !LoadLauncherState( Paths, State, StepError ) )
-		State = LauncherState();
-
-	LauncherRequest Request;
-	Request.settings = State.settings;
-	Request.saves = State.saves;
-	Request.userRoot = ProfileRoot;
-	Request.logPath = LauncherRoot + "/Launcher.log";
-	Request.dataSources = Configuration;
-	Request.hasExplicitDataRootOverride = HasOverride;
-	Request.explicitDataRoot = OverrideRoot;
-
-	// Import affordance. Resolved once per round so the chooser can hide the
-	// button outright when this installation cannot run the importer at all.
-	Request.importerPath = ImportTool.importerScript;
-	Request.retailDataRoot = ImportDestination;
-	Request.needsGameData = !HasDataRoot;
-	if( !HasDataRoot )
-	{
-		// A first run has no playable root yet, so the per-source probe below
-		// reports the conventional folder as unusable. Say what actually needs
-		// to happen instead of leaving the player with a dead folder picker.
-		Request.errorMessage = "No game data is installed yet. Choose Import Game Data "
-			"and point it at your own copy of the game to get started.";
-	}
-	for( const DataSource OptionSource : { DataSource::Retail, DataSource::Prototype } )
-	{
-		DataSourceOption Option;
-		Option.source = OptionSource;
-		std::string OptionRoot;
-		std::string OptionFailure;
-		if( ResolveSourceRoot( Configuration, OptionSource, HasOverride && OptionSource == SelectedSource, OverrideRoot, OptionRoot, OptionFailure ) )
-		{
-			Option.available = true;
-			Option.root = OptionRoot;
-		}
-		else
-		{
-			Option.error = OptionFailure;
-		}
-		Request.dataSourceOptions.push_back( Option );
-	}
-
-	// Populate standard display modes, plus the current setting if custom.
-	// HP2MacLauncher enumerates the real screen's native modes and only
-	// merges these in as extras; the Quickshell-based Linux launcher has no
-	// equivalent enumeration and relies entirely on this list.
-	{
-		const DisplayResolution StandardModes[] = {
-			{640, 480, "640 \xC3\x97 480"},      // U+00D7 in UTF-8
-			{800, 600, "800 \xC3\x97 600"},
-			{1024, 768, "1024 \xC3\x97 768"},
-			{1280, 720, "1280 \xC3\x97 720"},
-			{1280, 800, "1280 \xC3\x97 800"},
-			{1366, 768, "1366 \xC3\x97 768"},
-			{1440, 900, "1440 \xC3\x97 900"},
-			{1600, 900, "1600 \xC3\x97 900"},
-			{1680, 1050, "1680 \xC3\x97 1050"},
-			{1920, 1080, "1920 \xC3\x97 1080"},
-			{1920, 1200, "1920 \xC3\x97 1200"},
-			{2560, 1440, "2560 \xC3\x97 1440"},
-			{2560, 1600, "2560 \xC3\x97 1600"},
-			{3456, 2234, "3456 \xC3\x97 2234"},
-		};
-		for (const DisplayResolution& Mode : StandardModes)
-			Request.displayModes.push_back(Mode);
-
-		bool CurrentModeFound = false;
-		for (const DisplayResolution& Mode : Request.displayModes)
-		{
-			if (Mode.width == Request.settings.resolution.width
-				&& Mode.height == Request.settings.resolution.height)
-			{
-				CurrentModeFound = true;
-				break;
-			}
-		}
-		if (!CurrentModeFound)
-		{
-			char CurrentLabel[64];
-			std::snprintf(CurrentLabel, sizeof(CurrentLabel), "%d \xC3\x97 %d",
-				Request.settings.resolution.width, Request.settings.resolution.height);
-			Request.displayModes.push_back({
-				Request.settings.resolution.width,
-				Request.settings.resolution.height,
-				CurrentLabel
-			});
-		}
-	}
-
+	FLauncherRound Round;
+	if (!Round.Prepare(ArgC, ArgV, HasOverride, OverrideRoot)) return false;
 	LauncherResult Result;
-	const LaunchAction Action = RunHP2NativeLauncher( Request, Result, StepError );
-	if( Action == LaunchAction::Error )
+	std::string Error;
+	const bool Opened = HP2Launcher::RunLauncher(Round.Request, Result, Error);
+	Round.ReleaseVideo();
+	if (!Opened)
 	{
-		ShowLauncherError( StepError, "The launcher reported an error." );
+		ShowLauncherError(Error, "Could not open the launcher.");
 		return false;
 	}
-	if( Action == LaunchAction::Quit )
-		return false;
-
-	// The player picked a game folder or archive and asked to import it. Run
-	// the bundled importer, then re-enter the chooser so a successful import
-	// is immediately usable instead of requiring a second launch.
-	if( Action == LaunchAction::Import )
-	{
-		if( Result.importSource.empty() )
-			return false;
-
-		// A modal box is enough to tell the player why the window froze: the
-		// native chooser has already been dismissed at this point, so there is
-		// no window left to keep responsive during the copy.
-		SDL_ShowSimpleMessageBox( SDL_MESSAGEBOX_INFORMATION, "Importing Game Data",
-			"Copying and checking your game files. This can take a few minutes.",
-			NULL );
-
-		std::string ImportLog;
-		std::string ImportError;
-		const bool Imported = HP2DataImport::RunRetailImport(
-			ImportTool, Result.importSource, ImportDestination, ImportLog, ImportError );
-
-		if( !Imported )
-		{
-			ShowLauncherError( ImportError, "The game data import did not finish." );
-			return false;
-		}
-
-		// Point the launcher at what was just written so the next round finds
-		// it without relying on discovery order.
-		DataSourceConfiguration ImportedConfiguration = Configuration;
-		ImportedConfiguration.retailRoot = ImportDestination;
-		ImportedConfiguration.selected = DataSource::Retail;
-		std::string CommitError;
-		if( !CommitDataSourceConfiguration( LauncherRoot, ImportedConfiguration, CommitError ) )
-			fprintf( stderr, "hp2-launcher: could not record the imported data folder: %s\n",
-				CommitError.c_str() );
-
-		ShowLauncherNotice( "Game Data Imported",
-			"Your game files are ready. Choose New Game to start." );
-		Outcome.RunEngine = false;
-		return true;
-	}
-
-	// Persist every chooser decision before touching the engine so a failed
-	// launch still resumes from the same state next time.
-	if( !CommitDataSourceConfiguration( LauncherRoot, Result.dataSources, StepError )
-		|| !CommitLaunchSelection( LauncherRoot, Result.selection, StepError ) )
-	{
-		ShowLauncherError( StepError, "Could not save the launcher selection." );
-		return false;
-	}
-
-	const DataSource FinalSource = Result.dataSources.selected;
-	if( FinalSource != SelectedSource
-		&& !PrepareDataSourceProfile( LauncherRoot, FinalSource, ProfileRoot, StepError ) )
-	{
-		ShowLauncherError( StepError, "Could not prepare the newly selected data source." );
-		return false;
-	}
-
-	std::string FinalDataRoot;
-	std::string FinalFailure;
-	if( !ResolveSourceRoot( Result.dataSources, FinalSource, HasOverride, OverrideRoot, FinalDataRoot, FinalFailure ) )
-	{
-		ShowLauncherError( FinalFailure, "The selected data source has no usable game data." );
-		return false;
-	}
-
-	if( !ValidateLauncherSettings( Result.settings, StepError ) )
-	{
-		ShowLauncherError( StepError, "The selected settings are invalid." );
-		return false;
-	}
-	const LauncherPaths FinalPaths{ ProfileRoot, FinalDataRoot + "/System" };
-	if( !CommitLauncherSettings( FinalPaths, Result.settings, StepError ) )
-	{
-		ShowLauncherError( StepError, "Could not save the selected settings." );
-		return false;
-	}
-
-	if( !InstallHP2Paths( FinalDataRoot, ProfileRoot, StepError ) )
-	{
-		ShowLauncherError( StepError, "Could not install the selected paths." );
-		return false;
-	}
-
-	std::string PrefixUtf8;
-	if( !BuildSelectedCommand( Result.selection, PrefixUtf8, StepError ) )
-	{
-		ShowLauncherError( StepError, "The launcher selection cannot be started." );
-		return false;
-	}
-	if( Result.selection.action == LaunchAction::Quit || PrefixUtf8.empty() )
-		return false;
-
-	TCHAR Prefix[1024];
-	if( !appFromUtf8InPlace( Prefix, PrefixUtf8.c_str(), ARRAY_COUNT(Prefix) ) )
-	{
-		ShowLauncherError( PrefixUtf8, "The launch command is invalid." );
-		return false;
-	}
-
-	Outcome.RunEngine = true;
-	Outcome.EnginePrefix = Prefix;
-	return true;
+	return Round.Finish(Result, Outcome);
 }
 
 /*-----------------------------------------------------------------------------
@@ -5621,20 +5581,124 @@ struct FBrowserSession
 	std::unique_ptr<GlobalTickTraceReporter> GlobalTickTrace;
 	INT ExitCode;
 	UBOOL Finished;
+	// Frame pacing, owned by the frame callback below. The browser build
+	// cannot use the native MainLoopFrameCap: appSleep would block the page's
+	// main thread, which is also what serves input and presents frames.
+	DOUBLE FrameStartMs;	// emscripten_get_now() at the previous tick's start
+	INT TimingMode;			// timing this code installed last
+	INT TimingValue;
+	UBOOL VSync;			// display pacing asked for (UseVSync On/Adaptive)
+	// One-off pacing trace: when the next tick was due, when it actually ran,
+	// and how long the one before it took. Printed once the loop has settled
+	// and then removed; it exists to tell an early gate apart from a browser
+	// that hands the callback back late.
+	DOUBLE DueMs;			// when this tick should have started
+	DOUBLE AdmitLateMs;		// admitted - due, accumulated
+	DOUBLE AdmitEarlyMs;	// due - admitted, accumulated
+	DOUBLE TickCostMs;		// cost of the previous tick
+	INT LateSamples;
+	INT EarlySamples;
 };
 
 #if defined(__EMSCRIPTEN__)
+
+// Hands Emscripten the timing for the tick after this one. The callback only
+// runs when the browser hands it a turn, so the gap between ticks is left to
+// the scheduler rather than slept on, exactly as native MainLoopFrameCap
+// leaves it to appSleep.
+//
+// The wait is what is left of the player's interval once the tick that just
+// ran has been counted, recomputed on every call because Emscripten closes
+// over the value at the moment the timing is set (libeventloop.js:359). It is
+// a backstop rather than the mechanism: a browser timer this loop arms is a
+// nested timer, and nesting is what browsers clamp, so the limit is enforced
+// in HP2BrowserFrame itself and this only stops the wait from being longer
+// than it should.
+static void ScheduleNextBrowserFrame( FBrowserSession* Session, DOUBLE DueMs, FLOAT TargetTickRate )
+{
+	DOUBLE Interval = TargetTickRate > 0.f ? 1000.0 / (DOUBLE)TargetTickRate : 0.0;
+	DOUBLE Now = emscripten_get_now();
+	if( Session->VSync )
+	{
+		// Display-paced: the refresh decides the rate, and a limit below it is
+		// enforced by skipping turns in HP2BrowserFrame instead.
+		Session->TimingMode = EM_TIMING_RAF;
+		Session->TimingValue = 1;
+	}
+	else
+	{
+		// Aim at the due time rather than one interval from now. The browser
+		// hands this callback back a couple of milliseconds late on most turns
+		// -- measured at 2.1 ms under a 144 limit and 3.4 ms under 60 on this
+		// build -- and scheduling a fixed interval after a late handback never
+		// gives that slack back, so the achieved rate settles below the limit
+		// by roughly that much. Targeting the due time makes the wait whatever
+		// remains of it, which returns the slack on the following tick.
+		DOUBLE Wait = DueMs > 0.0 ? DueMs - Now : Interval;
+		INT Delay = (INT)( Wait + 0.5 );
+		// Nothing left to wait for: the next tick goes at once rather than
+		// making up the shortfall later, as native clamps the same way in the
+		// Max(0, ...) around its sleep.
+		Session->TimingMode = Delay >= 1 ? EM_TIMING_SETTIMEOUT : EM_TIMING_SETIMMEDIATE;
+		Session->TimingValue = Session->TimingMode == EM_TIMING_SETTIMEOUT ? Delay : 0;
+	}
+	emscripten_set_main_loop_timing( Session->TimingMode, Session->TimingValue );
+}
+
 static void HP2BrowserFrame( void* Arg )
 {
 	FBrowserSession* Session = (FBrowserSession*)Arg;
 	INT ExitCode = Session->ExitCode;
 	UEngine* Engine = Session->Loop.Engine;
+	DOUBLE FrameStartMs = emscripten_get_now();
+	// Read every frame so a setting the player changes in the panel takes
+	// effect without relaunching, the way it does natively. Unlimited is 0.
+	FLOAT TargetTickRate = Engine->GetMaxTickRate();
 	if( !Session->Finished )
 	{
 		if( GIsRunning && !GIsRequestingExit )
 		{
-			// No frame cap: requestAnimationFrame already paces the callback,
-			// and the unfocused 10 Hz clamp has no page-visibility meaning here.
+			// Early for the limit the player chose: skip this turn rather than
+			// tick faster than asked. This is what makes FrameRateLimit bind on
+			// the web, where the browser decides when the callback comes back
+			// and the scheduler cannot be trusted to hold a tick off on its
+			// own. The wait still has to be armed here: returning without it
+			// leaves the loop on whatever the last tick installed, which is
+			// SETIMMEDIATE, and hammers the task queue until the interval is
+			// up. Skipping is not a lost tick in game time -- MainLoopTick
+			// derives DeltaSeconds from the wall clock and does not advance
+			// OldTime on a turn that never ran, so the next real tick carries
+			// the whole interval, exactly as native appSleep keeps the
+			// simulation on the clock.
+			// Before the tick is due: skip this turn. Judged against the due
+			// time rather than against the last tick, so the lateness the
+			// browser showed is carried forward instead of being spent again.
+			if( TargetTickRate > 0.f && Session->DueMs > 0.0
+				&& FrameStartMs < Session->DueMs )
+				return;
+			// Pacing trace, after the gate so it counts real ticks only: an
+			// admission before the due time is the gate letting a tick in
+			// early, one after it is the browser handing the callback back
+			// late. The two are accumulated separately so the two causes cannot
+			// be confused again.
+			if( Session->DueMs > 0.0 )
+			{
+				DOUBLE Slack = FrameStartMs - Session->DueMs;
+				if( Slack >= 0.0 )
+				{
+					Session->AdmitLateMs += Slack;
+					++Session->LateSamples;
+				}
+				else
+				{
+					Session->AdmitEarlyMs -= Slack;
+					++Session->EarlySamples;
+				}
+			}
+			// Paced by ScheduleNextBrowserFrame from FrameRateLimit, the value
+			// native MainLoopFrameCap sleeps to. Browsers throttle a
+			// background tab themselves, so the native unfocused 10 Hz clamp
+			// is not mirrored here.
 			try
 			{
 				MainLoopTick( Session->Loop );
@@ -5646,6 +5710,38 @@ static void HP2BrowserFrame( void* Arg )
 					GError->HandleError();
 				fprintf( stderr, "%ls", GErrorHist );
 				Session->Finished = 1;
+			}
+			if( !Session->Finished )
+			{
+				INT Mode = -1, Value = -1;
+				emscripten_get_main_loop_timing( &Mode, &Value );
+				// A Flush inside the tick ran SwapControl, and on this platform
+				// that reaches eglSwapInterval, which installs the renderer's
+				// own timing: requestAnimationFrame for UseVSync On/Adaptive,
+				// setTimeout(0) for Off. This code never installs (0, 0), so a
+				// change here can only be the renderer. Detecting it by
+				// comparison rather than by reading the ini again means the
+				// first frames, before the loop existed, keep the seed value.
+				if( Mode != Session->TimingMode || Value != Session->TimingValue )
+					Session->VSync = Mode == EM_TIMING_RAF;
+				Session->FrameStartMs = FrameStartMs;
+				// This tick is due to have begun a full interval from its own
+				// start, not from the end of its work: anchoring to the end
+				// would push the due time late by a tick's cost and make every
+				// following admission look early by that much.
+				Session->DueMs = FrameStartMs + 1000.0 / (DOUBLE)( TargetTickRate > 0.f ? TargetTickRate : 1.0f );
+				ScheduleNextBrowserFrame( Session, Session->DueMs, TargetTickRate );
+				if( Session->LateSamples + Session->EarlySamples >= 200 )
+				{
+					// Each mean over its own samples: dividing one by the pair
+					// would make the two disagree by their sample ratio.
+					debugf( TEXT("<HP2JIT> rate=%f early_n=%d early_mean=%.3fms late_n=%d late_mean=%.3fms"),
+						(FLOAT)TargetTickRate, Session->EarlySamples,
+						Session->EarlySamples ? (FLOAT)( Session->AdmitEarlyMs / (DOUBLE)Session->EarlySamples ) : 0.0f,
+						Session->LateSamples,
+						Session->LateSamples ? (FLOAT)( Session->AdmitLateMs / (DOUBLE)Session->LateSamples ) : 0.0f );
+					Session->DueMs = 0.0;	// one report is the whole point
+				}
 			}
 		}
 		else
@@ -5713,79 +5809,12 @@ static INT FinishProcess( INT ExitCode )
 	return ExitCode;
 }
 
-int main( int ArgC, char* ArgV[] )
+static int HP2BootAfterLauncher(
+	int ArgC,
+	char* ArgV[],
+	const FString& EngineCommandLine,
+	HP2CrashReporterConfig& CrashConfig)
 {
-	// Install the real process allocator before anything else can touch
-	// engine containers: every FString/TArray allocation routes through
-	// GMalloc, and the FMallocError stub installed at static init returns
-	// NULL. PrepareHP2Paths' scoped bootstrap allocator saves and restores
-	// this value, so its deliberate std-only window still works; appInit
-	// later reassigns and initializes the same instance.
-	GMalloc = &Malloc;
-
-	// Validate and install the initial data/user roots before anything else
-	// touches the filesystem. Finding no game data is a normal first-run
-	// state, not a crash: the launcher still opens and offers to import, so
-	// only a broken environment ends the process here.
-	const HP2PathsBootstrap Bootstrap = BootstrapHP2Paths( ArgC, ArgV );
-	if( !Bootstrap.Installed && !ShouldRunNativeLauncher( ArgC, ArgV ) )
-		return 1;
-
-	// Crash reporter: signal handlers plus atexit marker; watchdog unused
-	// here. Writes crash-report.json (frames + log tail) into the working
-	// directory, prints "HP2_CRASH <code> <path>" on stderr, then re-raises.
-	HP2CrashReporterConfig CrashConfig = {};
-	CrashConfig.ProcessName = "hp2_game";
-	CrashConfig.LogFileBase = "HarryPotter2.log";
-	HP2InstallCrashReporter(&CrashConfig);
-
-	// An explicit -datadir=<path> overrides stored launcher configuration;
-	// its first recognized occurrence wins.
-	std::string OverrideRoot;
-	bool HasOverride = false;
-	for( int Index = 1; Index < ArgC; ++Index )
-	{
-		const char* Value = HP2DataDirectoryArgumentValue( ArgV[Index] );
-		if( Value )
-		{
-			OverrideRoot = Value;
-			HasOverride = true;
-			break;
-		}
-	}
-
-	// The Linux launcher locates its QML and the bundled importer relative to
-	// this binary, so a dist tree moved off the build machine still works.
-#if !MACOSX
-	SetHP2ShellLauncherExecutablePath( ArgC > 0 ? ArgV[0] : "" );
-#endif
-
-	// Forwarded command line and chooser flow build engine FStrings; the
-	// real process allocator was installed right after PrepareHP2Paths
-	// returned, so every append below allocates through it.
-	const FString ForwardedArguments = ForwardedCommandLine( ArgC, ArgV );
-	FString EngineCommandLine = ForwardedArguments;
-
-	// Interactive chooser rounds: repeat after recoverable errors until the
-	// player quits or selects a launchable target. Explicit maps, URLs, and
-	// bypass options skip the chooser entirely.
-	if( ShouldRunNativeLauncher( ArgC, ArgV ) )
-	{
-		for( ;; )
-		{
-			LauncherFlowResult Outcome;
-			if( !RunNativeLauncherRound( ArgC, ArgV, HasOverride, OverrideRoot, Outcome ) )
-				return 0;
-			if( Outcome.RunEngine )
-			{
-				EngineCommandLine = Outcome.EnginePrefix.Len()
-					? Outcome.EnginePrefix + TEXT(" ") + ForwardedArguments
-					: ForwardedArguments;
-				break;
-			}
-		}
-	}
-
 	INT ExitCode = 0;
 	HP2InstallTraceHookBindings( GTraceHookBindings );
 	// StaticInit may construct the Fire class default object. The observer must
@@ -5852,6 +5881,8 @@ int main( int ArgC, char* ArgV[] )
 		// Emscripten builds exactly one SDL video backend (the HTML5 canvas).
 		// Any SDL_HINT_VIDEODRIVER value makes SDL_Init(SDL_INIT_VIDEO) fail,
 		// so the hint is left unset here.
+#elif HP2_WINDOWS
+		// Let SDL select the available Windows video backend.
 #else
 		SDL_SetHint( SDL_HINT_VIDEODRIVER, "wayland,x11" );
 #endif
@@ -5997,10 +6028,25 @@ int main( int ArgC, char* ArgV[] )
 			Session->Loop.WorldCollisionReporter = Session->WorldCollisionReporter.get();
 			Session->Loop.StaticBspProbe = Session->StaticBspProbe.get();
 			MainLoopBegin( Session->Loop );
+			// Pace from FrameRateLimit (ScheduleNextBrowserFrame), so seed the
+			// state it needs. The first tick has no previous tick to measure
+			// against, so it is treated as having taken no time at all.
+			Session->FrameStartMs = emscripten_get_now();
+			Session->TimingMode = EM_TIMING_SETTIMEOUT;
+			Session->TimingValue = 1;
+			// The renderer's own SwapControl ran before the loop existed, so
+			// its eglSwapInterval call had no loop to reprogram and the ini is
+			// the only source of the choice here. Absent the key this reads as
+			// display-paced, which is what the renderer's own VS_Adaptive
+			// default resolves to (XOpenGL.cpp:268); the web panel always
+			// writes it.
+			FString VSyncSetting;
+			Session->VSync = !( GConfig->GetString( TEXT("XOpenGLDrv.XOpenGLRenderDevice"), TEXT("UseVSync"), VSyncSetting )
+				&& appStricmp( *VSyncSetting, TEXT("Off") ) == 0 );
 			// An explicit frame rate is required: with fps = 0 Emscripten never
-			// starts the loop in this configuration. 30 keeps the page
-			// responsive; requestAnimationFrame still paces the callback.
-			emscripten_set_main_loop_arg( HP2BrowserFrame, Session, 10, 0 );
+			// starts the loop in this configuration. This only times the first
+			// tick; HP2BrowserFrame reprograms the timing from then on.
+			emscripten_set_main_loop_arg( HP2BrowserFrame, Session, 1000, 0 );
 			// EXIT_RUNTIME is disabled, so returning here leaves the runtime
 			// (and the frame callback) alive.
 			return 0;
@@ -6024,4 +6070,137 @@ int main( int ArgC, char* ArgV[] )
 #endif
 
 	return FinishProcess( ExitCode );
+}
+
+#if defined(__EMSCRIPTEN__)
+struct FBrowserLauncherState
+{
+	FLauncherRound* Round = nullptr;
+	HP2Launcher::FLauncherSession* Session = nullptr;
+	int ArgC = 0;
+	char** ArgV = nullptr;
+	FString ForwardedArguments;
+	HP2CrashReporterConfig CrashConfig{};
+};
+
+static void HP2LauncherBrowserFrame(void* Context)
+{
+	FBrowserLauncherState* State = static_cast<FBrowserLauncherState*>(Context);
+	if (State->Session->Frame()) return;
+
+	emscripten_cancel_main_loop();
+	LauncherResult Result = State->Session->Result();
+	delete State->Session;
+	State->Session = nullptr;
+
+	LauncherFlowResult Outcome;
+	const bool Continue = State->Round->Finish(Result, Outcome);
+	State->Round->ReleaseVideo();
+	delete State->Round;
+	State->Round = nullptr;
+	if (!Continue || !Outcome.RunEngine)
+	{
+		delete State;
+		FinishProcess(0);
+		return;
+	}
+
+	EM_ASM({ if (Module.hp2Web) Module.hp2Web.syncUser(); });
+	FString EngineCommandLine = Outcome.EnginePrefix.Len()
+		? Outcome.EnginePrefix + TEXT(" ") + State->ForwardedArguments
+		: State->ForwardedArguments;
+	const int ArgC = State->ArgC;
+	char** ArgV = State->ArgV;
+	HP2CrashReporterConfig CrashConfig = State->CrashConfig;
+	delete State;
+	HP2BootAfterLauncher(ArgC, ArgV, EngineCommandLine, CrashConfig);
+}
+#endif
+
+int main( int ArgC, char* ArgV[] )
+{
+	// Install the real process allocator before anything else can touch
+	// engine containers: every FString/TArray allocation routes through
+	// GMalloc, and the FMallocError stub installed at static init returns
+	// NULL. PrepareHP2Paths' scoped bootstrap allocator saves and restores
+	// this value, so its deliberate std-only window still works; appInit
+	// later reassigns and initializes the same instance.
+	GMalloc = &Malloc;
+
+	// Validate and install the initial data/user roots before anything else
+	// touches the filesystem. Finding no game data is a normal first-run
+	// state, not a crash: the launcher still opens and offers to import, so
+	// only a broken environment ends the process here.
+	const HP2PathsBootstrap Bootstrap = BootstrapHP2Paths( ArgC, ArgV );
+	if( !Bootstrap.Installed && !ShouldRunNativeLauncher( ArgC, ArgV ) )
+		return 1;
+
+	// Crash reporter: signal handlers plus atexit marker; watchdog unused
+	// here. Writes crash-report.json (frames + log tail) into the working
+	// directory, prints "HP2_CRASH <code> <path>" on stderr, then re-raises.
+	HP2CrashReporterConfig CrashConfig = {};
+	CrashConfig.ProcessName = "hp2_game";
+	CrashConfig.LogFileBase = "HarryPotter2.log";
+	HP2InstallCrashReporter(&CrashConfig);
+
+	// An explicit -datadir=<path> overrides stored launcher configuration;
+	// its first recognized occurrence wins.
+	std::string OverrideRoot;
+	bool HasOverride = false;
+	for( int Index = 1; Index < ArgC; ++Index )
+	{
+		const char* Value = HP2DataDirectoryArgumentValue( ArgV[Index] );
+		if( Value )
+		{
+			OverrideRoot = Value;
+			HasOverride = true;
+			break;
+		}
+	}
+
+	const FString ForwardedArguments = ForwardedCommandLine( ArgC, ArgV );
+	FString EngineCommandLine = ForwardedArguments;
+	const bool ShowLauncher = ShouldRunNativeLauncher( ArgC, ArgV );
+
+#if defined(__EMSCRIPTEN__)
+	if( ShowLauncher )
+	{
+		FLauncherRound* Round = new FLauncherRound;
+		if( !Round->Prepare( ArgC, ArgV, HasOverride, OverrideRoot ) )
+		{
+			delete Round;
+			return 1;
+		}
+		FBrowserLauncherState* State = new FBrowserLauncherState;
+		State->Round = Round;
+		State->ArgC = ArgC;
+		State->ArgV = ArgV;
+		State->ForwardedArguments = ForwardedArguments;
+		State->CrashConfig = CrashConfig;
+		State->Session = new HP2Launcher::FLauncherSession(
+			Round->Request, HP2LauncherPlatform::CurrentCapabilities());
+		std::string Error;
+		if( !State->Session->Open( Error ) )
+		{
+			ShowLauncherError( Error, "Could not open the launcher." );
+			delete State->Session;
+			Round->ReleaseVideo();
+			delete State;
+			return 1;
+		}
+		emscripten_set_main_loop_arg( HP2LauncherBrowserFrame, State, 0, 0 );
+		return 0;
+	}
+#endif
+
+	if( ShowLauncher )
+	{
+		LauncherFlowResult Outcome;
+		if( !RunNativeLauncherRound( ArgC, ArgV, HasOverride, OverrideRoot, Outcome ) )
+			return 0;
+		EngineCommandLine = Outcome.EnginePrefix.Len()
+			? Outcome.EnginePrefix + TEXT(" ") + ForwardedArguments
+			: ForwardedArguments;
+	}
+	return HP2BootAfterLauncher( ArgC, ArgV, EngineCommandLine, CrashConfig );
 }

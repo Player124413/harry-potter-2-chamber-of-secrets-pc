@@ -18,7 +18,7 @@
 #include "Core.h"
 #include "FConfigCacheIni.h"
 #include "FMallocAnsi.h"
-#include "FFileManagerUnix.h"
+#include "FFileManagerPlatformHP2.h"
 
 #include <cstdarg>
 #include <cstdio>
@@ -37,7 +37,7 @@ namespace
 	// Installed into GMalloc as the first statement of main(), before any
 	// engine allocation happens (global operator new routes to GMalloc).
 	FMallocAnsi GTestAllocator;
-	FFileManagerUnix GTestFileManager;
+	FFileManagerPlatformHP2 GTestFileManager;
 
 	int GFailures = 0;
 	const char* GTestName = "config_ini";
@@ -809,7 +809,11 @@ namespace
 		// "caf" + U+00E9 + U+4E2D + U+1F3AE (astral: exercises surrogate
 		// encoding) + "!" — built from explicit code units so the fixture
 		// never depends on source-file encoding.
-		static const TCHAR Text[] = { 'c','a','f', 0x00E9, 0x4E2D, 0x1F3AE, '!', 0 };
+#if defined(_WIN32)
+		static const TCHAR Text[] = { 'c','a','f', static_cast<TCHAR>(0x00E9), static_cast<TCHAR>(0x4E2D), static_cast<TCHAR>(0xD83C), static_cast<TCHAR>(0xDFAE), '!', 0 };
+#else
+		static const TCHAR Text[] = { 'c','a','f', static_cast<TCHAR>(0x00E9), static_cast<TCHAR>(0x4E2D), static_cast<TCHAR>(0x1F3AE), '!', 0 };
+#endif
 
 		const char* Name = "unicode_rt.ini";
 		{
@@ -838,7 +842,11 @@ namespace
 			FString Loaded;
 			Require( Cache.GetString( TEXT("Uni"), TEXT("Text"), Loaded, *File ) == 1, "unicode reload must find the key" );
 			Require( appStrcmp( *Loaded, Text ) == 0, "unicode round-trip must reproduce the exact value" );
-			Require( appStrlen( *Loaded ) == 7, "astral char must decode to ONE host TCHAR (got %i units)", appStrlen( *Loaded ) );
+#if defined(_WIN32)
+			Require( appStrlen( *Loaded ) == 8, "astral char must decode to TWO UTF-16 host units (got %i units)", appStrlen( *Loaded ) );
+#else
+			Require( appStrlen( *Loaded ) == 7, "astral char must decode to ONE UTF-32 host unit (got %i units)", appStrlen( *Loaded ) );
+#endif
 		}
 
 		// ASCII-only content takes the ANSI path: no BOM, raw bytes.

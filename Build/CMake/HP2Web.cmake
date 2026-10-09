@@ -88,6 +88,9 @@ add_custom_target(hp2_web ALL
 hp2_add_behavior_test(web_shell_smoke "${Python3_EXECUTABLE}"
     "${PROJECT_SOURCE_DIR}/Build/web_smoke.py" --mode=shell "--root=${HP2_WEB_DIST_DIR}")
 set_tests_properties(web_shell_smoke PROPERTIES LABELS "smoke;data-none")
+hp2_add_behavior_test(web_launcher_smoke "${Python3_EXECUTABLE}"
+    "${PROJECT_SOURCE_DIR}/Build/web_smoke.py" --mode=launcher "--root=${HP2_WEB_DIST_DIR}")
+set_tests_properties(web_launcher_smoke PROPERTIES LABELS "smoke;data-none" RESOURCE_LOCK hp2_gpu)
 if(HP2_TEST_DATA_PRESENT)
     hp2_add_behavior_test(web_boot_smoke "${Python3_EXECUTABLE}"
         "${PROJECT_SOURCE_DIR}/Build/web_smoke.py" --mode=boot "--root=${HP2_WEB_DIST_DIR}"

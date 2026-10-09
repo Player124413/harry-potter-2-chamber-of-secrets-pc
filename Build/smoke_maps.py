@@ -30,6 +30,7 @@ from pathlib import Path
 import re
 import shutil
 import struct
+import platform
 import sys
 from typing import Iterator
 
@@ -43,7 +44,13 @@ else:
 SmokeError = game_test.GameTestError
 
 
-DEFAULT_APP = Path("dist/linux-arm64/bin/hp2_game" if sys.platform.startswith("linux") else "dist/macos-arm64/HarryPotter2.app")
+DEFAULT_APP = Path(
+    "dist/macos-arm64/HarryPotter2.app"
+    if sys.platform == "darwin"
+    else "dist/linux-arm64/bin/hp2_game"
+    if platform.machine() in ("aarch64", "arm64")
+    else "dist/linux-x64/bin/hp2_game"
+)
 DEFAULT_DATA_ROOT = Path("HarryPotter2/Unreal")
 DEFAULT_TICKS = 300
 DEFAULT_TIMEOUT_SECONDS = 120.0

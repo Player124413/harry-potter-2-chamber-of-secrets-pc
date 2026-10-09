@@ -32,6 +32,7 @@ import threading
 import time
 from typing import Any, BinaryIO, Callable, Iterator, Sequence
 
+import hp2_proc
 import actor_transition_ledger
 import creature_generator_trace
 import fire_texture_trace
@@ -641,36 +642,48 @@ def run_command(
                     start_gate.wait(timeout=timeout_seconds)
                 except threading.BrokenBarrierError as error:
                     raise GameTestError("paired launch start barrier failed") from error
-            process = subprocess.Popen(
+            process = hp2_proc.popen_group(
                 command, cwd=repo_root, env=child_environment,
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                start_new_session=True,
             )
             try:
                 output, _ = process.communicate(timeout=timeout_seconds)
             except subprocess.TimeoutExpired as error:
                 timed_out = True
                 partial_output = error.output or b""
-                cleanup_action = "sigterm"
-                cleanup_error = _signal_group(process.pid, signal.SIGTERM)
-                try:
-                    output, _ = process.communicate(timeout=TERMINATION_GRACE_SECONDS)
-                except subprocess.TimeoutExpired as term_error:
-                    partial_output = term_error.output or partial_output
+                if os.name == "nt":
                     cleanup_action = "sigkill"
-                    kill_error = _signal_group(process.pid, signal.SIGKILL)
-                    if kill_error:
-                        cleanup_error = "; ".join(item for item in (cleanup_error, kill_error) if item)
+                    try:
+                        hp2_proc.kill_group(process)
+                    except OSError as kill_error:
+                        cleanup_error = f"cannot terminate process tree: {kill_error}"
                     try:
                         output, _ = process.communicate(timeout=KILL_GRACE_SECONDS)
                     except subprocess.TimeoutExpired as kill_error:
                         output = kill_error.output or partial_output
                         cleanup_action = "failed"
-                        cleanup_error = "; ".join(item for item in (cleanup_error, "app did not exit after process-group SIGKILL") if item)
+                        cleanup_error = "; ".join(item for item in (cleanup_error, "app did not exit after taskkill") if item)
+                else:
+                    cleanup_action = "sigterm"
+                    cleanup_error = _signal_group(process.pid, signal.SIGTERM)
+                    try:
+                        output, _ = process.communicate(timeout=TERMINATION_GRACE_SECONDS)
+                    except subprocess.TimeoutExpired as term_error:
+                        partial_output = term_error.output or partial_output
+                        cleanup_action = "sigkill"
+                        kill_error = _signal_group(process.pid, signal.SIGKILL)
+                        if kill_error:
+                            cleanup_error = "; ".join(item for item in (cleanup_error, kill_error) if item)
+                        try:
+                            output, _ = process.communicate(timeout=KILL_GRACE_SECONDS)
+                        except subprocess.TimeoutExpired as kill_error:
+                            output = kill_error.output or partial_output
+                            cleanup_action = "failed"
+                            cleanup_error = "; ".join(item for item in (cleanup_error, "app did not exit after process-group SIGKILL") if item)
                 if not output:
                     output = partial_output
             exit_status = process.returncode
-            if _group_exists(process.pid):
+            if os.name != "nt" and _group_exists(process.pid):
                 orphaned_process_group = not timed_out
                 remaining_action, remaining_error = _stop_remaining_group(process.pid)
                 if remaining_action != "none":
@@ -683,28 +696,42 @@ def run_command(
         finally:
             if process is not None and process.poll() is None:
                 orphaned_process_group = True
-                cleanup_action = "sigterm"
-                final_error = _signal_group(process.pid, signal.SIGTERM)
-                if final_error:
-                    cleanup_error = "; ".join(item for item in (cleanup_error, final_error) if item)
-                try:
-                    final_output, _ = process.communicate(timeout=TERMINATION_GRACE_SECONDS)
-                    output = final_output or output
-                except subprocess.TimeoutExpired as error:
+                if os.name == "nt":
                     cleanup_action = "sigkill"
-                    partial_output = error.output or output
-                    kill_error = _signal_group(process.pid, signal.SIGKILL)
-                    if kill_error:
-                        cleanup_error = "; ".join(item for item in (cleanup_error, kill_error) if item)
+                    try:
+                        hp2_proc.kill_group(process)
+                    except OSError as kill_error:
+                        cleanup_error = f"cannot terminate process tree: {kill_error}"
                     try:
                         final_output, _ = process.communicate(timeout=KILL_GRACE_SECONDS)
-                        output = final_output or partial_output
+                        output = final_output or output
                     except subprocess.TimeoutExpired as kill_error:
-                        output = kill_error.output or partial_output
+                        output = kill_error.output or output
                         cleanup_action = "failed"
-                        cleanup_error = "; ".join(item for item in (cleanup_error, "app could not be reaped after SIGKILL") if item)
+                        cleanup_error = "; ".join(item for item in (cleanup_error, "app could not be reaped after taskkill") if item)
+                else:
+                    cleanup_action = "sigterm"
+                    final_error = _signal_group(process.pid, signal.SIGTERM)
+                    if final_error:
+                        cleanup_error = "; ".join(item for item in (cleanup_error, final_error) if item)
+                    try:
+                        final_output, _ = process.communicate(timeout=TERMINATION_GRACE_SECONDS)
+                        output = final_output or output
+                    except subprocess.TimeoutExpired as error:
+                        cleanup_action = "sigkill"
+                        partial_output = error.output or output
+                        kill_error = _signal_group(process.pid, signal.SIGKILL)
+                        if kill_error:
+                            cleanup_error = "; ".join(item for item in (cleanup_error, kill_error) if item)
+                        try:
+                            final_output, _ = process.communicate(timeout=KILL_GRACE_SECONDS)
+                            output = final_output or partial_output
+                        except subprocess.TimeoutExpired as kill_error:
+                            output = kill_error.output or partial_output
+                            cleanup_action = "failed"
+                            cleanup_error = "; ".join(item for item in (cleanup_error, "app could not be reaped after SIGKILL") if item)
                 exit_status = process.returncode
-                if _group_exists(process.pid):
+                if os.name != "nt" and _group_exists(process.pid):
                     remaining_action, remaining_error = _stop_remaining_group(process.pid)
                     if remaining_action != "none":
                         cleanup_action = remaining_action

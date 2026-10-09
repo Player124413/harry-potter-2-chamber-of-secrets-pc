@@ -17,28 +17,34 @@
 #pragma warning(disable: 4351)
 #endif
 
-#ifdef WIN32
+#ifndef XOPENGL_WGL
+#if defined(_WIN32) && !XOPENGL_USE_SDL
+#define XOPENGL_WGL 1
+#else
+#define XOPENGL_WGL 0
+#endif
+#endif
+
+#ifdef _WIN32
 	#define WINBUILD 1
 	#include <windows.h>
 	#include <mmsystem.h>
+#endif
 
-	extern "C"
-	{
-		#include "glad.h"
-	}
+extern "C"
+{
+	#include "glad.h"
+}
+
+#if XOPENGL_WGL
 	#include "glext.h" // from https://khronos.org/registry/OpenGL/index_gl.php
 	#define WGL_WGLEXT_PROTOTYPES
 	#include "wglext.h"
-
-#else
-	extern "C"
-	{
-		#include "glad.h"
-	}
-    #include <unistd.h>
+#elif !defined(_WIN32)
+	#include <unistd.h>
 #endif
 
-#if !defined(_WIN32)
+#if !XOPENGL_WGL
 # include <SDL2/SDL.h>
 #endif
 
@@ -444,7 +450,7 @@ class UXOpenGLRenderDevice : public URenderDevice
 	BITFIELD UseBufferInvalidation;
 	BITFIELD UseShaderDrawParameters;
 	BITFIELD UseShaderCache;
-#if _WIN32
+#if XOPENGL_WGL
 	BITFIELD ReduceMouseLag; // Present through a low-latency DXGI flip-model swapchain (WGL_NV_DX_interop)
 #endif
 
@@ -478,7 +484,7 @@ class UXOpenGLRenderDevice : public URenderDevice
 	//
 	// Window, OS, and global GL context state
 	//
-#ifdef _WIN32
+#if XOPENGL_WGL
 	HGLRC glContext;
 	HWND hWnd;
 	HDC hDC;
@@ -576,7 +582,7 @@ class UXOpenGLRenderDevice : public URenderDevice
 	FGammaRamp OriginalRamp; // to restore original value at exit or crash.
 	FLOAT Gamma;
 
-#if !_WIN32
+#if !XOPENGL_WGL
 	static SDL_GLContext CurrentGLContext;
 	static TArray<SDL_GLContext> AllContexts;
 #else
@@ -637,7 +643,7 @@ class UXOpenGLRenderDevice : public URenderDevice
 	FLOAT StoredGamma;
 	UBOOL StoredOneXBlending;
 	UBOOL StoredActorXBlending;
-#if _WIN32
+#if XOPENGL_WGL
 	UBOOL StoredUsingDXGISwapchain;
 #endif
 	bool bIsOrtho;
@@ -2040,7 +2046,7 @@ class UXOpenGLRenderDevice : public URenderDevice
 	void  UnsetRes();
 	void  SwapControl();
 
-#if _WIN32 && !OLDUNREAL_WINXP
+#if XOPENGL_WGL && !OLDUNREAL_WINXP
 	// DXGI low-latency swapchain (ReduceMouseLag).
 	bool CreateDXGIFramebuffer(INT Width, INT Height, HANDLE hDev, struct ID3D11Device* pDevice, struct IDXGISwapChain* pSwapChain);
 	void InitDXGISwapchain(INT Width, INT Height);
@@ -2057,7 +2063,7 @@ class UXOpenGLRenderDevice : public URenderDevice
 	UBOOL IsSupportedGLVersion(INT MajorVersion, INT MinorVersion);
 	void SelectGLVersion();
 
-#if !_WIN32
+#if !XOPENGL_WGL
     UBOOL SetSDLAttributes() const;
 	SDL_Window* CreateTemporaryWindow() const;
 	void DestroyTemporaryWindow(SDL_Window* Window) const;
@@ -2121,7 +2127,7 @@ class UXOpenGLRenderDevice : public URenderDevice
 	//
 	// Error logging
 	//
-#ifdef WIN32
+#if XOPENGL_WGL
 	static void CALLBACK DebugCallback(unsigned int source, unsigned int type, unsigned int id, unsigned int severity, int length, const char* message, const void* userParam);
 #else
     static void DebugCallback(unsigned int source, unsigned int type, unsigned int id, unsigned int severity, int length, const char* message, const void* userParam);

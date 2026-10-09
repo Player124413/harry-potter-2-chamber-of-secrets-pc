@@ -542,7 +542,11 @@ void UBoolProperty::Serialize( FArchive& Ar )
 	guard(UBoolProperty::Serialize);
 	Super::Serialize( Ar );
 	if( !Ar.IsLoading() && !Ar.IsSaving() )
-		Ar << BitMask;
+	{
+		DWORD SerializedBitMask = BitMask;
+		Ar << SerializedBitMask;
+		BitMask = SerializedBitMask;
+	}
 	unguardobj;
 }
 void UBoolProperty::ExportCppItem( FOutputDevice& Out ) const

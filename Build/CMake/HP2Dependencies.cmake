@@ -37,6 +37,168 @@ FetchContent_Declare(hp2_squish
     GIT_SHALLOW FALSE
     GIT_SUBMODULES ""
 )
+# Runtime importer dependencies. All compression libraries are static and
+# narrowly configured; archive support is omitted from the Emscripten build.
+if(NOT EMSCRIPTEN)
+    FetchContent_Declare(hp2_zlib
+        GIT_REPOSITORY https://github.com/madler/zlib.git
+        GIT_TAG da607da739fa6047df13e66a2af6b8bec7c2a498
+    )
+    FetchContent_Declare(hp2_bzip2
+        GIT_REPOSITORY https://github.com/libarchive/bzip2.git
+        GIT_TAG 6a8690fc8d26c815e798c588f796eabe9d684cf0
+        GIT_SHALLOW FALSE
+    )
+    FetchContent_Declare(hp2_xz
+        GIT_REPOSITORY https://github.com/tukaani-project/xz.git
+        GIT_TAG d3e650e63c110e830fd5391e7f8b45df0b91d3da
+    )
+    FetchContent_Declare(hp2_libarchive
+        GIT_REPOSITORY https://github.com/libarchive/libarchive.git
+        GIT_TAG 27cbc7827172698143e440801fc0ba39ccb4f1f5
+    )
+endif()
+FetchContent_Declare(hp2_utf8proc
+    GIT_REPOSITORY https://github.com/JuliaStrings/utf8proc.git
+    GIT_TAG 79cdd5ab40c79afa559f689ffc13b76812dee1ac
+)
+FetchContent_Declare(hp2_imgui
+    GIT_REPOSITORY https://github.com/ocornut/imgui.git
+    GIT_TAG f1cc2ae15e53a861a874c3034aae6798fde194ab
+)
+if(NOT EMSCRIPTEN)
+    FetchContent_Declare(hp2_nativefiledialog
+        GIT_REPOSITORY https://github.com/btzy/nativefiledialog-extended.git
+        GIT_TAG 65b2f070a0fcfee0d453a64e770a217ab0b6ff4f
+    )
+endif()
+FetchContent_MakeAvailable(hp2_imgui)
+if(NOT EMSCRIPTEN)
+    set(NFD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(NFD_BUILD_SDL2_TESTS OFF CACHE BOOL "" FORCE)
+    set(NFD_BUILD_SDL3_TESTS OFF CACHE BOOL "" FORCE)
+    set(NFD_BUILD_GLFW3_TESTS OFF CACHE BOOL "" FORCE)
+    set(NFD_INSTALL OFF CACHE BOOL "" FORCE)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        find_package(PkgConfig QUIET)
+        if(PkgConfig_FOUND)
+            pkg_check_modules(HP2_GTK3 QUIET gtk+-3.0)
+        endif()
+        if(NOT HP2_GTK3_FOUND)
+            message(FATAL_ERROR "nativefiledialog-extended requires GTK3 development files (gtk+-3.0)")
+        endif()
+        set(NFD_PORTAL OFF CACHE BOOL "" FORCE)
+        set(NFD_X11 ON CACHE BOOL "" FORCE)
+        set(NFD_WAYLAND OFF CACHE BOOL "" FORCE)
+    endif()
+    FetchContent_MakeAvailable(hp2_nativefiledialog)
+endif()
+
+if(WIN32)
+    FetchContent_Declare(hp2_freetype
+        GIT_REPOSITORY https://github.com/freetype/freetype.git
+        GIT_TAG 0a0221a1347e2f1e07c395263540026e9a0aa7c7
+        GIT_SHALLOW FALSE
+    )
+    FetchContent_Declare(hp2_harfbuzz
+        GIT_REPOSITORY https://github.com/harfbuzz/harfbuzz.git
+        GIT_TAG eb033319fc2ebe723597fa497d4bb4331bab8b6b
+        GIT_SHALLOW FALSE
+    )
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    set(FT_DISABLE_ZLIB ON CACHE BOOL "" FORCE)
+    set(FT_DISABLE_BZIP2 ON CACHE BOOL "" FORCE)
+    set(FT_DISABLE_PNG ON CACHE BOOL "" FORCE)
+    set(FT_DISABLE_HARFBUZZ ON CACHE BOOL "" FORCE)
+    set(FT_DISABLE_BROTLI ON CACHE BOOL "" FORCE)
+    set(SKIP_INSTALL_ALL ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(hp2_freetype)
+    set(HB_HAVE_FREETYPE ON CACHE BOOL "" FORCE)
+    set(HB_BUILD_UTILS OFF CACHE BOOL "" FORCE)
+    set(HB_BUILD_SUBSET OFF CACHE BOOL "" FORCE)
+    set(HB_BUILD_RASTER OFF CACHE BOOL "" FORCE)
+    set(HB_BUILD_VECTOR OFF CACHE BOOL "" FORCE)
+    set(HB_BUILD_GPU OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(hp2_harfbuzz)
+endif()
+
+set(UTF8PROC_INSTALL OFF CACHE BOOL "" FORCE)
+set(UTF8PROC_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(hp2_utf8proc)
+if(NOT EMSCRIPTEN)
+    set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(ZLIB_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+    set(ZLIB_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+    set(ZLIB_BUILD_STATIC ON CACHE BOOL "" FORCE)
+    set(ZLIB_INSTALL OFF CACHE BOOL "" FORCE)
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(hp2_zlib)
+    set(ENABLE_LIB_ONLY ON CACHE BOOL "" FORCE)
+    set(ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+    set(ENABLE_DOCS OFF CACHE BOOL "" FORCE)
+    set(ENABLE_STATIC_LIB ON CACHE BOOL "" FORCE)
+    set(ENABLE_SHARED_LIB OFF CACHE BOOL "" FORCE)
+    set(BZIP2_ENABLE_EXECUTABLE OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(hp2_bzip2)
+    add_library(hp2_bzip2 STATIC
+        "${hp2_bzip2_SOURCE_DIR}/blocksort.c"
+        "${hp2_bzip2_SOURCE_DIR}/huffman.c"
+        "${hp2_bzip2_SOURCE_DIR}/crctable.c"
+        "${hp2_bzip2_SOURCE_DIR}/randtable.c"
+        "${hp2_bzip2_SOURCE_DIR}/compress.c"
+        "${hp2_bzip2_SOURCE_DIR}/decompress.c"
+        "${hp2_bzip2_SOURCE_DIR}/bzlib.c"
+    )
+    target_include_directories(hp2_bzip2 PUBLIC "${hp2_bzip2_SOURCE_DIR}")
+    set_target_properties(hp2_bzip2 PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    set(XZ_TOOL_XZ OFF CACHE BOOL "" FORCE)
+    set(XZ_TOOL_XZDEC OFF CACHE BOOL "" FORCE)
+    set(XZ_TOOL_LZMADEC OFF CACHE BOOL "" FORCE)
+    set(XZ_TOOL_LZMAINFO OFF CACHE BOOL "" FORCE)
+    set(XZ_DOC OFF CACHE BOOL "" FORCE)
+    set(XZ_NLS OFF CACHE BOOL "" FORCE)
+    set(XZ_TESTS OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(hp2_xz)
+    set(ENABLE_LIBB2 OFF CACHE BOOL "" FORCE)
+    set(ENABLE_LZO OFF CACHE BOOL "" FORCE)
+    set(ENABLE_MBEDTLS OFF CACHE BOOL "" FORCE)
+    set(ENABLE_NETTLE OFF CACHE BOOL "" FORCE)
+    set(ENABLE_CNG OFF CACHE BOOL "" FORCE)
+    set(ENABLE_LIBGCC OFF CACHE BOOL "" FORCE)
+    if(WIN32)
+        # libarchive's AUTO regex selection falls through to an optional
+        # libgcc-dependent PCRE shim under MinGW. The importer only enables
+        # ZIP/TAR/7z readers, none of which requires POSIX regex.
+        set(POSIX_REGEX_LIB "LIBC" CACHE STRING "" FORCE)
+    endif()
+    foreach(_hp2_crypto_impl LIBSYSTEM LIBC LIBC2 LIBC3 LIBMD MBEDTLS NETTLE OPENSSL)
+        foreach(_hp2_crypto_alg MD5 RMD160 SHA1 SHA256 SHA384 SHA512)
+            set("ARCHIVE_CRYPTO_${_hp2_crypto_alg}_${_hp2_crypto_impl}" OFF CACHE BOOL "" FORCE)
+        endforeach()
+    endforeach()
+    set(ENABLE_LIBXML2 OFF CACHE BOOL "" FORCE)
+    set(ENABLE_EXPAT OFF CACHE BOOL "" FORCE)
+    set(ENABLE_OPENSSL OFF CACHE BOOL "" FORCE)
+    set(ENABLE_LZ4 OFF CACHE BOOL "" FORCE)
+    set(ENABLE_ZSTD OFF CACHE BOOL "" FORCE)
+    set(ENABLE_BZip2 ON CACHE BOOL "" FORCE)
+    set(ENABLE_LZMA ON CACHE BOOL "" FORCE)
+    set(ENABLE_ZLIB ON CACHE BOOL "" FORCE)
+    set(ENABLE_ACL OFF CACHE BOOL "" FORCE)
+    set(ENABLE_XATTR OFF CACHE BOOL "" FORCE)
+    set(ENABLE_ICONV OFF CACHE BOOL "" FORCE)
+    set(ENABLE_TAR OFF CACHE BOOL "" FORCE)
+    set(ENABLE_CPIO OFF CACHE BOOL "" FORCE)
+    set(ENABLE_CAT OFF CACHE BOOL "" FORCE)
+    set(ENABLE_UNZIP OFF CACHE BOOL "" FORCE)
+    set(ENABLE_TEST OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(hp2_libarchive)
+    set(_hp2_compression_links "zlibstatic;hp2_bzip2;liblzma")
+    set_property(TARGET archive_static PROPERTY LINK_LIBRARIES "${_hp2_compression_links}")
+    set_property(TARGET archive_static PROPERTY INTERFACE_LINK_LIBRARIES "${_hp2_compression_links}")
+endif()
+
 
 # SDL2 is linked statically; its tests, examples, and install surface are not
 # part of the HP2 graph.
@@ -105,6 +267,22 @@ if(NOT EMSCRIPTEN)
     set(ALSOFT_UPDATE_BUILD_VERSION OFF CACHE BOOL "" FORCE)
     set(ALSOFT_ENABLE_MODULES OFF CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(hp2_openal_soft)
+    if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "^(AppleClang|Clang)$")
+        # OpenAL Soft 1.25.2's overloaded unique_ptr dereference member pointer
+        # does not satisfy libc++'s transform adaptor under llvm-mingw.
+        set(_hp2_openal_alc "${hp2_openal_soft_SOURCE_DIR}/alc/alc.cpp")
+        file(READ "${_hp2_openal_alc}" _hp2_openal_source)
+        set(_hp2_openal_transform "std::views::transform(&ContextBase::EffectSlotCluster::operator*)")
+        set(_hp2_openal_transform_compat "std::views::transform([](ContextBase::EffectSlotCluster &cluster) -> decltype(auto) { return *cluster; })")
+        string(FIND "${_hp2_openal_source}" "${_hp2_openal_transform}" _hp2_openal_transform_at)
+        if(_hp2_openal_transform_at GREATER_EQUAL 0)
+            string(REPLACE "${_hp2_openal_transform}" "${_hp2_openal_transform_compat}"
+                _hp2_openal_source "${_hp2_openal_source}")
+            file(WRITE "${_hp2_openal_alc}" "${_hp2_openal_source}")
+        elseif(NOT _hp2_openal_source MATCHES "views::transform\\(\\[\\]\\(ContextBase::EffectSlotCluster")
+            message(FATAL_ERROR "OpenAL Soft 1.25.2 transform compatibility patch did not match alc/alc.cpp")
+        endif()
+    endif()
     if(CMAKE_CXX_COMPILER_ID MATCHES "^(AppleClang|Clang)$")
         # OpenAL Soft 1.25.2 enables -Werror=function-effects on Clang 20+, but
         # Xcode 26 diagnoses its AudioUnit callback lambdas under the newer rules.
@@ -169,8 +347,17 @@ hp2_declare_text_provider(CoreText
 hp2_declare_text_provider(FreeType
     SOURCES "${HP2_THIRD_PARTY_ROOT}/XOpenGLDrv/Src/NativeTextFreeType.cpp"
     LINK_LIBS PkgConfig::HP2_FREETYPE PkgConfig::HP2_HARFBUZZ PkgConfig::HP2_FONTCONFIG
-    CONDITION "NOT APPLE AND HP2_FREETYPE_FOUND AND HP2_HARFBUZZ_FOUND AND HP2_FONTCONFIG_FOUND"
+    CONDITION "NOT APPLE AND NOT WIN32 AND HP2_FREETYPE_FOUND AND HP2_HARFBUZZ_FOUND AND HP2_FONTCONFIG_FOUND"
 )
+if(WIN32)
+    hp2_declare_text_provider(FreeTypeBundled
+        SOURCES
+            "${HP2_THIRD_PARTY_ROOT}/XOpenGLDrv/Src/NativeTextFreeType.cpp"
+            "${HP2_THIRD_PARTY_ROOT}/XOpenGLDrv/Src/NativeTextFontsBundled.cpp"
+        LINK_LIBS freetype harfbuzz
+        CONDITION "WIN32"
+    )
+endif()
 
 # The browser build uses the same FreeType/HarfBuzz provider as Linux. Only
 # font resolution differs -- Fontconfig is a native library with its own font
@@ -190,7 +377,7 @@ if(EMSCRIPTEN)
     hp2_declare_text_provider(FreeTypeEmscripten
         SOURCES
             "${HP2_THIRD_PARTY_ROOT}/XOpenGLDrv/Src/NativeTextFreeType.cpp"
-            "${HP2_THIRD_PARTY_ROOT}/XOpenGLDrv/Src/NativeTextFreeTypeEmscripten.cpp"
+            "${HP2_THIRD_PARTY_ROOT}/XOpenGLDrv/Src/NativeTextFontSeamEmscripten.cpp"
         LINK_LIBS ""
         CONDITION "TRUE"
     )

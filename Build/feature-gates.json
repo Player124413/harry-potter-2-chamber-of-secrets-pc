@@ -30,6 +30,12 @@
           "platform": "web (wasm64)",
           "data_profile": "data-prototype",
           "note": "text.ready observed; fallback chain staged (game face + Liberation Sans/Mono + Noto Sans SC, all OFL) and coverage is probed with FT_Get_Char_Index, but the fallback path itself has not been exercised on a character that needs it, and no one has reviewed the result"
+        },
+        "FreeTypeBundled": {
+          "state": "experimental",
+          "platform": "windows-x64",
+          "data_profile": "data-prototype",
+          "note": "not runtime-verified"
         }
       }
     }

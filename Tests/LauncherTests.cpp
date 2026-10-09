@@ -13,16 +13,47 @@
 #include <filesystem>
 #include <limits>
 #include <iterator>
+#include <random>
 #include <string>
+#if defined(_WIN32)
+#include <stdlib.h>
+#define setenv(name, value, overwrite) _putenv_s((name), (value))
+#define unsetenv(name) _putenv_s((name), "")
+#elif defined(__UNIX__)
 #include <sys/stat.h>
-#include <unistd.h>
-#include <vector>
+#endif
 
 namespace fs = std::filesystem;
 using namespace HP2Launcher;
 
 namespace
 {
+fs::path UniqueTemporaryDirectory()
+{
+	fs::path base = fs::temp_directory_path();
+	const fs::path checkout = fs::canonical(fs::current_path());
+	const fs::path canonicalBase = fs::weakly_canonical(base);
+	const fs::path relative = canonicalBase.lexically_relative(checkout);
+	if (relative.empty() || *relative.begin() != "..")
+		base = checkout.parent_path();
+	std::random_device random;
+	for (;;)
+	{
+		std::string name = "hp2-launcher-tests-";
+		for (int i = 0; i < 8; ++i)
+		{
+			const unsigned value = random();
+			for (int shift = 0; shift < static_cast<int>(sizeof(value) * 2); ++shift)
+				name += "0123456789abcdef"[(value >> (shift * 4)) & 0xf];
+		}
+		const fs::path path = base / name;
+		std::error_code error;
+		if (fs::create_directory(path, error))
+			return path;
+		if (error && error != std::errc::file_exists)
+			throw fs::filesystem_error("create temporary test directory", path, error);
+	}
+}
 int Failures = 0;
 FMallocAnsi RuntimeMalloc;
 
@@ -43,14 +74,7 @@ struct TemporaryRoots
 
 	TemporaryRoots()
 	{
-		char pattern[] = "/tmp/hp2-launcher-tests.XXXXXX";
-		char* created = ::mkdtemp(pattern);
-		if (!created)
-		{
-			std::perror("mkdtemp");
-			std::exit(2);
-		}
-		root = created;
+		root = UniqueTemporaryDirectory();
 		system = root / "System";
 		user = root / "User";
 		fs::create_directories(system);
@@ -391,8 +415,10 @@ void TestConfigRoundTripAndBackups()
 		"[HGame.Harry]\nbAutoQuaff=True\n[Other]\nCaseKey=CaseValue\n";
 	WriteBytes(roots.user / "Game.ini", originalGame);
 	WriteBytes(roots.user / "User.ini", originalUser);
+#if __UNIX__
 	::chmod((roots.user / "Game.ini").c_str(), 0640);
 	::chmod((roots.user / "User.ini").c_str(), 0604);
+#endif
 
 	std::string error;
 	LauncherSettings selected = DistinctSettings();
@@ -438,11 +464,13 @@ void TestConfigRoundTripAndBackups()
 	Expect(user.find('\r') == std::string::npos, "User.ini LF newline style is preserved");
 	Expect(ReadBytes(roots.user / "Game.ini.bak") == originalGame, "first Game.ini backup is exact");
 	Expect(ReadBytes(roots.user / "User.ini.bak") == originalUser, "first User.ini backup is exact");
+#if __UNIX__
 	struct stat gameMode, userMode;
 	::stat((roots.user / "Game.ini").c_str(), &gameMode);
 	::stat((roots.user / "User.ini").c_str(), &userMode);
 	Expect((gameMode.st_mode & 0777) == 0640, "Game.ini destination mode is retained");
 	Expect((userMode.st_mode & 0777) == 0604, "User.ini destination mode is retained");
+#endif
 
 	LauncherState loaded;
 	Expect(LoadLauncherState(roots.paths(), loaded, error), "committed settings reload");
@@ -581,9 +609,11 @@ void TestReadOnlyCancellationAndMaterialization()
 	Expect(CommitLauncherSettings(roots.paths(), state.settings, error), "first commit materializes missing writable INIs");
 	Expect(fs::exists(roots.user / "Game.ini") && fs::exists(roots.user / "User.ini"), "commit seeds both writable INIs");
 	Expect(!fs::exists(roots.user / "Game.ini.bak") && !fs::exists(roots.user / "User.ini.bak"), "materializing absent INIs does not invent backups");
+#if __UNIX__
 	struct stat gameMode;
 	::stat((roots.user / "Game.ini").c_str(), &gameMode);
 	Expect((gameMode.st_mode & 0777) == 0600, "new writable INI is mode 0600");
+#endif
 }
 
 void TestMalformedRecovery()
@@ -706,7 +736,7 @@ void TestConventionalDataRoots()
 	const char* priorXdgDataHomeValue = std::getenv("XDG_DATA_HOME");
 	const bool hadXdgDataHome = priorXdgDataHomeValue != nullptr;
 	const std::string priorXdgDataHome = hadXdgDataHome ? priorXdgDataHomeValue : "";
-	::setenv("HOME", roots.root.c_str(), 1);
+	::setenv("HOME", roots.root.string().c_str(), 1);
 	// A real desktop session's $XDG_DATA_HOME would otherwise outrank the
 	// redirected $HOME below when resolving the Linux data-home prefix.
 	::unsetenv("XDG_DATA_HOME");
@@ -764,6 +794,154 @@ fs::path CreateDataRoot(const TemporaryRoots& roots, const char* name, const cha
 	return dataRoot;
 }
 
+// A populated retail overlay must be discoverable from the conventional
+// Data/Retail folder. This is the exact case that regressed: the importer
+// writes there, but discovery only probed the historical Data/Unreal path, so
+// a player who had imported correctly was still told they had no game data.
+void TestConventionalRetailDiscovery()
+{
+	TemporaryRoots roots;
+	const char* priorHomeValue = std::getenv("HOME");
+	const bool hadHome = priorHomeValue != nullptr;
+	const std::string priorHome = hadHome ? priorHomeValue : "";
+	const char* priorXdgDataHomeValue = std::getenv("XDG_DATA_HOME");
+	const bool hadXdgDataHome = priorXdgDataHomeValue != nullptr;
+	const std::string priorXdgDataHome = hadXdgDataHome ? priorXdgDataHomeValue : "";
+	::setenv("HOME", roots.root.string().c_str(), 1);
+	// A real desktop session's $XDG_DATA_HOME would otherwise outrank the
+	// redirected $HOME below when resolving the Linux data-home prefix.
+	::unsetenv("XDG_DATA_HOME");
+
+#if MACOSX
+	const fs::path dataHome = fs::canonical(roots.root) / "Library" / "Application Support" /
+		"Harry Potter 2" / "Data";
+#else
+	const fs::path dataHome = fs::canonical(roots.root) / ".local" / "share" /
+		"harry-potter-2" / "Data";
+#endif
+
+	// Nothing installed yet: discovery must report absence rather than
+	// inventing a root, which is what lets the launcher offer the import.
+	std::string discovered;
+	Expect(!DiscoverHP2RetailDataRoot(discovered) && discovered.empty(),
+		"retail discovery reports nothing when no data is installed");
+
+	// Populate the conventional retail folder the way an import does.
+	const fs::path retail = dataHome / "Retail";
+	fs::create_directories(retail / "System");
+	fs::create_directories(retail / "Maps");
+	fs::create_directories(retail / "Textures");
+	WriteBytes(retail / "System" / "Default.ini", std::string("[Sentinel]\nName=retail\n"));
+	WriteBytes(retail / "Maps" / "PrivetDr.unr", "retail");
+	WriteBytes(retail / "Textures" / "Shared.utx", "retail");
+
+	std::string canonical;
+	Expect(DiscoverHP2RetailDataRoot(canonical),
+		"a populated conventional Data/Retail root is discovered");
+	Expect(canonical == fs::canonical(retail).string(),
+		"retail discovery returns the canonical conventional root");
+
+	// The historical hand-copy location stays a valid fallback, but only once
+	// the import destination is gone: with both present the importer's folder
+	// must win, or a stale Data/Unreal tree would shadow a fresh import.
+	const fs::path legacy = dataHome / "Unreal";
+	fs::create_directories(legacy / "System");
+	WriteBytes(legacy / "System" / "Default.ini", std::string("[Sentinel]\nName=legacy\n"));
+	std::string bothPresent;
+	Expect(DiscoverHP2RetailDataRoot(bothPresent) &&
+		bothPresent == fs::canonical(retail).string(),
+		"the import destination outranks the legacy Data/Unreal location");
+
+	fs::remove_all(retail);
+	std::string legacyOnly;
+	Expect(DiscoverHP2RetailDataRoot(legacyOnly) &&
+		legacyOnly == fs::canonical(legacy).string(),
+		"the legacy Data/Unreal location is still discovered on its own");
+
+	if (hadHome)
+		::setenv("HOME", priorHome.c_str(), 1);
+	else
+		::unsetenv("HOME");
+	if (hadXdgDataHome)
+		::setenv("XDG_DATA_HOME", priorXdgDataHome.c_str(), 1);
+	else
+		::unsetenv("XDG_DATA_HOME");
+}
+
+// The same contract one level up: BootstrapHP2Paths must actually install a
+// conventional Data/Retail root when no checkout is present, and must report
+// a recoverable outcome when nothing is installed. The chooser-level checks
+// above exercise DiscoverHP2RetailDataRoot only, so a regression confined to
+// the bootstrap would otherwise pass unnoticed - which is exactly how the
+// "you have no game data" failure survived: this file already covered
+// discovery from out/retail-data but not from the import destination.
+void TestBootstrapInstallsConventionalRetailRoot()
+{
+	TemporaryRoots roots;
+	const char* priorHomeValue = std::getenv("HOME");
+	const bool hadHome = priorHomeValue != nullptr;
+	const std::string priorHome = hadHome ? priorHomeValue : "";
+	const char* priorXdgDataHomeValue = std::getenv("XDG_DATA_HOME");
+	const bool hadXdgDataHome = priorXdgDataHomeValue != nullptr;
+	const std::string priorXdgDataHome = hadXdgDataHome ? priorXdgDataHomeValue : "";
+
+#if MACOSX
+	const fs::path dataHome = roots.root / "Library" / "Application Support" /
+		"Harry Potter 2" / "Data";
+	const fs::path userHome = roots.root / "Library" / "Application Support" /
+		"Harry Potter 2" / "User";
+#else
+	const fs::path dataHome = roots.root / ".local" / "share" / "harry-potter-2" / "Data";
+	const fs::path userHome = roots.root / ".local" / "share" / "harry-potter-2" / "User";
+#endif
+	// canonical() rejects a path that does not exist yet.
+	fs::create_directories(dataHome);
+	fs::create_directories(userHome.parent_path());
+
+	// A cwd with no HarryPotter2/Unreal above it, so only the conventional
+	// home-rooted path can satisfy the bootstrap.
+	const fs::path neutral = roots.root / "Neutral";
+	fs::create_directories(neutral);
+	const fs::path previousCwd = fs::current_path();
+
+	// Nothing installed: recoverable, and it must advertise where an import
+	// would land so the launcher knows what to offer.
+	::setenv("HOME", roots.root.string().c_str(), 1);
+	::unsetenv("XDG_DATA_HOME");
+	fs::current_path(neutral);
+	{
+		char* Arguments[1] = {const_cast<char*>("hp2-launcher-tests")};
+		const HP2PathsBootstrap missing = BootstrapHP2Paths(1, Arguments);
+		Expect(!missing.Installed,
+			"an empty install reports a recoverable no-data bootstrap");
+		Expect(!missing.RetailDataRoot.empty() &&
+			fs::path(missing.RetailDataRoot) == fs::canonical(dataHome) / "Retail",
+			"the no-data bootstrap names the conventional retail import destination");
+	}
+
+	// Populate that destination the way an import does.
+	const fs::path retail = dataHome / "Retail";
+	fs::create_directories(retail / "System");
+	fs::create_directories(retail / "Maps");
+	WriteBytes(retail / "System" / "Default.ini", std::string("[Sentinel]\nName=retail\n"));
+	WriteBytes(retail / "Maps" / "PrivetDr.unr", "retail");
+	{
+		char* Arguments[1] = {const_cast<char*>("hp2-launcher-tests")};
+		const HP2PathsBootstrap found = BootstrapHP2Paths(1, Arguments);
+		Expect(found.Installed,
+			"the bootstrap installs a conventional Data/Retail root with no checkout present");
+	}
+
+	fs::current_path(previousCwd);
+	if (hadHome)
+		::setenv("HOME", priorHome.c_str(), 1);
+	else
+		::unsetenv("HOME");
+	if (hadXdgDataHome)
+		::setenv("XDG_DATA_HOME", priorXdgDataHome.c_str(), 1);
+	else
+		::unsetenv("XDG_DATA_HOME");
+}
 void TestDataSourceCatalogPersistence()
 {
 	TemporaryRoots roots;
@@ -999,7 +1177,7 @@ void TestDataDirectoryArgumentContract()
 	const char* priorXdgDataHomeValue = std::getenv("XDG_DATA_HOME");
 	const bool hadXdgDataHome = priorXdgDataHomeValue != nullptr;
 	const std::string priorXdgDataHome = hadXdgDataHome ? priorXdgDataHomeValue : "";
-	::setenv("HOME", roots.root.c_str(), 1);
+	::setenv("HOME", roots.root.string().c_str(), 1);
 	::unsetenv("XDG_DATA_HOME");
 	Arguments arguments({"hp2", "--datadir=" + prototype.string(), "-DaTaDiR=" + retail.string(),
 		"-datadir=" + prototype.string()});
@@ -1622,6 +1800,8 @@ int main()
 	TestUtf16AndInvalidEncodingRecovery();
 	TestUnsafeBackupRejected();
 	TestConventionalDataRoots();
+	TestConventionalRetailDiscovery();
+	TestBootstrapInstallsConventionalRetailRoot();
 	TestDataSourceCatalogPersistence();
 	TestMalformedDataSourceCatalogRecovery();
 	TestDataSourceProfilesAndMigration();

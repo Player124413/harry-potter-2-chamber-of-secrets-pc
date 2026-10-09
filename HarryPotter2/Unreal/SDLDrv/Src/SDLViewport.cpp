@@ -9,8 +9,10 @@
 #include "FConfigCacheIni.h"
 #include <errno.h>
 #include <string.h>
-#include <sys/wait.h>
-#include <unistd.h>
+#if __UNIX__
+	#include <sys/wait.h>
+	#include <unistd.h>
+#endif
 
 /*-----------------------------------------------------------------------------
 	Static registration.

@@ -14,18 +14,27 @@
 #include "HP2Paths.h"
 
 #include "HP2PortableSha256.h"
-#include <sys/stat.h>
-
-#include <unistd.h>
-
 #include <algorithm>
-#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <random>
 #include <string>
 #include <utility>
 #include <vector>
+#if defined(_WIN32)
+#include <io.h>
+#include <fcntl.h>
+#else
+#include <unistd.h>
+#include <fcntl.h>
+#endif
+#if defined(_WIN32)
+#define setenv(name, value, overwrite) _putenv_s((name), (value))
+#define unsetenv(name) _putenv_s((name), "")
+#endif
 
 /*----------------------------------------------------------------------------
 	Minimal Core link seams: HP2Paths.cpp references exactly these entry
@@ -137,20 +146,9 @@ namespace
 
 	bool EnsureParentDirectories(const std::string& Path)
 	{
-		const size_t LastSlash = Path.rfind('/');
-		if (LastSlash == std::string::npos || LastSlash == 0)
-			return true;
-		for (size_t Index = 1; Index < LastSlash; ++Index)
-		{
-			if (Path[Index] != '/')
-				continue;
-			const std::string Partial = Path.substr(0, Index);
-			if (mkdir(Partial.c_str(), 0755) == 0 || errno == EEXIST)
-				continue;
-			return false;
-		}
-		const std::string Parent = Path.substr(0, LastSlash);
-		return mkdir(Parent.c_str(), 0755) == 0 || errno == EEXIST;
+		std::error_code Error;
+		std::filesystem::create_directories(std::filesystem::u8path(Path).parent_path(), Error);
+		return !Error;
 	}
 
 	void WriteFile(const std::string& Path, const std::string& Content)
@@ -161,16 +159,14 @@ namespace
 			++GFailures;
 			return;
 		}
-		FILE* Stream = std::fopen(Path.c_str(), "wb");
+		std::ofstream Stream(std::filesystem::u8path(Path), std::ios::binary | std::ios::trunc);
 		if (!Stream)
 		{
 			std::fprintf(stderr, "FAIL: cannot write %s\n", Path.c_str());
 			++GFailures;
 			return;
 		}
-		if (!Content.empty())
-			std::fwrite(Content.data(), 1, Content.size(), Stream);
-		std::fclose(Stream);
+		Stream.write(Content.data(), static_cast<std::streamsize>(Content.size()));
 	}
 
 	using FileList = std::vector<std::pair<std::string, std::string>>;
@@ -221,10 +217,22 @@ namespace
 
 	std::string WriteOverlayTree(const char* CaseName, const FileList& Files)
 	{
-		const char* ArtifactDir = std::getenv("HP2_ARTIFACT_DIR");
-		const std::string Base = JoinPath(
-			ArtifactDir ? ArtifactDir : ".", "tmp/data-identity");
-		const std::string Root = JoinPath(Base, CaseName);
+		static const std::filesystem::path Base = [] {
+			std::random_device Random;
+			for (;;)
+			{
+				std::string Name = "hp2-data-identity-";
+				for (int I = 0; I < 32; ++I)
+					Name += "0123456789abcdef"[Random() & 0xf];
+				const auto Path = std::filesystem::temp_directory_path() / Name;
+				std::error_code Error;
+				if (std::filesystem::create_directory(Path, Error))
+					return Path;
+				if (Error && Error != std::errc::file_exists)
+					throw std::filesystem::filesystem_error("create test directory", Path, Error);
+			}
+		}();
+		const std::string Root = (Base / CaseName).u8string();
 		for (const auto& File : Files)
 			WriteFile(JoinPath(Root, File.first.c_str()), File.second);
 		return Root;
@@ -239,38 +247,71 @@ namespace
 		return Files;
 	}
 
-	// Captures everything written to stderr while Fn runs.
 	template <typename Fn>
 	std::string CaptureStderr(Fn&& FnBody)
 	{
-		std::fflush(stderr);
+		const auto Path = std::filesystem::temp_directory_path()
+			/ ("hp2-data-identity-stderr-" + [&] {
+				std::random_device Random;
+				std::string Hex;
+				for (int I = 0; I < 32; ++I) Hex += "0123456789abcdef"[Random() & 0xf];
+				return Hex;
+			}());
+		std::ofstream Create(Path, std::ios::binary);
+		Create.close();
+#if defined(_WIN32)
+		const int Captured = _wopen(Path.c_str(), _O_RDWR | _O_BINARY);
+		const int Saved = _dup(_fileno(stderr));
+#else
+		const int Captured = open(Path.c_str(), O_RDWR);
 		const int Saved = dup(fileno(stderr));
-		char Template[] = "/tmp/hp2-data-identity-stderr-XXXXXX";
-		const int Captured = mkstemp(Template);
+#endif
 		std::string Text;
 		if (Captured >= 0 && Saved >= 0)
 		{
+			std::fflush(stderr);
+#if defined(_WIN32)
+			_dup2(Captured, _fileno(stderr));
+#else
 			dup2(Captured, fileno(stderr));
+#endif
 			FnBody();
 			std::fflush(stderr);
+#if defined(_WIN32)
+			_dup2(Saved, _fileno(stderr));
+			_lseek(Captured, 0, SEEK_SET);
+			char Buffer[4096];
+			int Read = 0;
+			while ((Read = _read(Captured, Buffer, sizeof(Buffer))) > 0)
+#else
 			dup2(Saved, fileno(stderr));
-			close(Saved);
 			lseek(Captured, 0, SEEK_SET);
 			char Buffer[4096];
 			ssize_t Read = 0;
 			while ((Read = read(Captured, Buffer, sizeof(Buffer))) > 0)
+#endif
 				Text.append(Buffer, static_cast<size_t>(Read));
 		}
-		else if (Saved >= 0)
-		{
-			close(Saved);
+		else
 			FnBody();
-		}
 		if (Captured >= 0)
 		{
+#if defined(_WIN32)
+			_close(Captured);
+#else
 			close(Captured);
-			unlink(Template);
+#endif
 		}
+		if (Saved >= 0)
+		{
+#if defined(_WIN32)
+			_close(Saved);
+#else
+			close(Saved);
+#endif
+		}
+		std::error_code Ignored;
+		std::filesystem::remove(Path, Ignored);
 		return Text;
 	}
 
@@ -564,16 +605,15 @@ int main()
 
 		const std::string Home = JoinPath(Base, "Home");
 		WriteFile(JoinPath(Home, ".keep"), "");
-		char PreviousHome[4096];
-		const bool HadHome = std::getenv("HOME") != nullptr;
-		if (HadHome)
-			std::snprintf(PreviousHome, sizeof(PreviousHome), "%s",
-				std::getenv("HOME"));
-		char PreviousCwd[4096];
-		const bool HadCwd = getcwd(PreviousCwd, sizeof(PreviousCwd)) != nullptr;
+		const char* PreviousHome = std::getenv("HOME");
+		const std::string SavedHome = PreviousHome ? PreviousHome : "";
+		const bool HadHome = PreviousHome != nullptr;
+		const std::filesystem::path PreviousCwd = std::filesystem::current_path();
 
 		setenv("HOME", Home.c_str(), 1);
-		const bool ChdirOk = chdir(Base.c_str()) == 0;
+		std::error_code CwdError;
+		std::filesystem::current_path(std::filesystem::u8path(Base), CwdError);
+		const bool ChdirOk = !CwdError;
 		Expect(ChdirOk, "discovery test chdir into the checkout parent");
 		if (ChdirOk)
 		{
@@ -582,10 +622,9 @@ int main()
 				"PrepareHP2Paths discovers out/retail-data from the cwd");
 		}
 
-		if (HadCwd)
-			chdir(PreviousCwd);
+		std::filesystem::current_path(PreviousCwd, CwdError);
 		if (HadHome)
-			setenv("HOME", PreviousHome, 1);
+			setenv("HOME", SavedHome.c_str(), 1);
 		else
 			unsetenv("HOME");
 	}
@@ -627,13 +666,14 @@ int main()
 		WriteFile(JoinPath(Home, ".keep"), "");
 
 		FMalloc* const SavedMalloc = GMalloc;
-		char PreviousCwd[4096];
-		const bool HadCwd = getcwd(PreviousCwd, sizeof(PreviousCwd)) != nullptr;
+		const std::filesystem::path PreviousCwd = std::filesystem::current_path();
 		setenv("HOME", Home.c_str(), 1);
 
 		GMalloc = &RefusingMalloc;
 		bool DiscoveryOk = false;
-		if (chdir(Base.c_str()) == 0)
+		std::error_code CwdError;
+		std::filesystem::current_path(std::filesystem::u8path(Base), CwdError);
+		if (!CwdError)
 		{
 			char* Arguments[1] = {const_cast<char*>("hp2-data-identity-tests")};
 			DiscoveryOk = PrepareHP2Paths(1, Arguments);
@@ -642,8 +682,7 @@ int main()
 
 		Expect(DiscoveryOk,
 			"PrepareHP2Paths survives a refusing pre-init allocator");
-		if (HadCwd)
-			chdir(PreviousCwd);
+		std::filesystem::current_path(PreviousCwd, CwdError);
 
 		// Explicit -datadir through the same bootstrap under the same
 		// refusing allocator, plus proof the caller's allocator still works.

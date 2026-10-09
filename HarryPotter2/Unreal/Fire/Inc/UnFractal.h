@@ -16,7 +16,7 @@
 	General structures.
 ----------------------------------------------------------------------------*/
 
-#if !_MSC_VER
+#if !_MSC_VER && !defined(__int64)
 	typedef SQWORD __int64;
 #endif
 

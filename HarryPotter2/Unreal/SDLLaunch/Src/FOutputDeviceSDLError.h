@@ -8,7 +8,11 @@
 #include <SDL2/SDL.h>
 
 #include <string>
-#include <unistd.h>
+#if __UNIX__
+	#include <unistd.h>
+#elif defined(_WIN32)
+	#include <io.h>
+#endif
 
 #include "Core.h"
 
@@ -50,7 +54,13 @@ private:
 		// The modal box needs a human to dismiss it; unattended sessions
 		// (harness, CI) would hang here forever. Skip it whenever stdin is
 		// not a terminal so fatal errors exit deterministically.
+#if __UNIX__
 		if( !isatty( STDIN_FILENO ) )
+#elif defined(_WIN32)
+		if( !_isatty( _fileno(stdin) ) )
+#else
+		if( true )
+#endif
 			return;
 		const std::string Utf8 = ToUtf8( Message );
 		SDL_ShowSimpleMessageBox(

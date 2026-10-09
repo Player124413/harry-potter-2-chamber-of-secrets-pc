@@ -26,7 +26,7 @@
 #include "Engine.h"
 #include "FConfigCacheIni.h"
 #include "FFeedbackContextAnsi.h"
-#include "FFileManagerUnix.h"
+#include "FFileManagerPlatformHP2.h"
 #include "FMallocAnsi.h"
 #include "FOutputDeviceAnsiError.h"
 #include "FOutputDeviceFile.h"
@@ -2180,7 +2180,7 @@ int RunAudit(const Options& OptionsValue)
 FOutputDeviceFile Log;
 FOutputDeviceAnsiError Error;
 FFeedbackContextAnsi Warn;
-FFileManagerUnix FileManager;
+FFileManagerPlatformHP2 FileManager;
 FMallocAnsi Malloc;
 
 } // namespace

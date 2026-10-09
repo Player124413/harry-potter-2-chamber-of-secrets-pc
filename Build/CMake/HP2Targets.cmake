@@ -8,40 +8,48 @@ add_library(hp2_compile_policy INTERFACE)
 target_compile_features(hp2_compile_policy INTERFACE cxx_std_17)
 
 target_compile_definitions(hp2_compile_policy INTERFACE
-    __UNIX__=1
     ASM=0
     UNICODE=1
     _UNICODE=1
     HP2_HAS_NATIVE_TEXT_BACKEND=$<BOOL:${HP2_HAS_NATIVE_TEXT_BACKEND}>
 )
 if(APPLE)
-    target_compile_definitions(hp2_compile_policy INTERFACE MACOSX=1)
+    target_compile_definitions(hp2_compile_policy INTERFACE MACOSX=1 __UNIX__=1)
+elseif(WIN32)
+    target_compile_definitions(hp2_compile_policy INTERFACE
+        HP2_WINDOWS=1
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+        _WIN32_WINNT=0x0A00
+    )
+else()
+    target_compile_definitions(hp2_compile_policy INTERFACE __UNIX__=1)
 endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "^(AppleClang|Clang)$")
     target_compile_options(hp2_compile_policy INTERFACE
-        -fsigned-char
-        -Wall
-        -Wextra
+        "$<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-fsigned-char>"
+        "$<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-Wall>"
+        "$<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-Wextra>"
         # The VC6-era headers intentionally expose empty virtual defaults,
         # placement-new forms, and null-base reflected offset expressions.
         # Keep host-width conversions fatal while silencing that known noise.
-        -Wno-unused-parameter
-        -Wno-reorder-ctor
-        -Wno-inline-new-delete
-        -Wno-implicit-exception-spec-mismatch
-        -Wno-deprecated-copy
-        -Wno-exceptions
-        -Wno-ignored-qualifiers
-        -Wno-sign-compare
-        -Wno-overloaded-virtual
-        -Wno-extra-tokens
-        -Wno-string-plus-int
-        -Wno-null-pointer-subtraction
-        -Werror=shorten-64-to-32
-        -Werror=pointer-to-int-cast
-        -Werror=int-to-pointer-cast
-        "$<$<CONFIG:Release>:-O3>"
+        "$<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-Wno-unused-parameter>"
+        "$<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-Wno-reorder-ctor>"
+        "$<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-Wno-inline-new-delete>"
+        "$<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-Wno-implicit-exception-spec-mismatch>"
+        "$<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-Wno-deprecated-copy>"
+        "$<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-Wno-exceptions>"
+        "$<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-Wno-ignored-qualifiers>"
+        "$<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-Wno-sign-compare>"
+        "$<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-Wno-overloaded-virtual>"
+        "$<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-Wno-extra-tokens>"
+        "$<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-Wno-string-plus-int>"
+        "$<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-Wno-null-pointer-subtraction>"
+        "$<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-Werror=shorten-64-to-32>"
+        "$<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-Werror=pointer-to-int-cast>"
+        "$<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-Werror=int-to-pointer-cast>"
+        "$<$<AND:$<CONFIG:Release>,$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>>:-O3>"
     )
 endif()
 
@@ -153,6 +161,9 @@ endfunction()
 hp2_add_engine_object(hp2_core Core ${HP2_CORE_SOURCES})
 target_include_directories(hp2_core PUBLIC ${HP2_CORE_INCLUDE_DIRS})
 target_link_libraries(hp2_core PUBLIC vorbisfile)
+if(WIN32)
+    target_link_libraries(hp2_core PUBLIC SDL2::SDL2-static ole32 shell32 shlwapi ws2_32)
+endif()
 
 hp2_add_engine_object(hp2_engine Engine ${HP2_ENGINE_SOURCES})
 target_include_directories(hp2_engine PUBLIC ${HP2_ENGINE_INCLUDE_DIRS})
@@ -177,6 +188,19 @@ hp2_add_engine_object(hp2_sdldrv SDLDrv ${HP2_SDLDRV_SOURCES})
 target_include_directories(hp2_sdldrv PUBLIC ${HP2_SDLDRV_INCLUDE_DIRS})
 target_link_libraries(hp2_sdldrv PUBLIC SDL2::SDL2-static)
 
+set(HP2_IMGUI_ROOT "${hp2_imgui_SOURCE_DIR}")
+add_library(hp2_imgui STATIC
+    "${HP2_IMGUI_ROOT}/imgui.cpp"
+    "${HP2_IMGUI_ROOT}/imgui_draw.cpp"
+    "${HP2_IMGUI_ROOT}/imgui_tables.cpp"
+    "${HP2_IMGUI_ROOT}/imgui_widgets.cpp"
+    "${HP2_IMGUI_ROOT}/backends/imgui_impl_sdl2.cpp"
+    "${HP2_IMGUI_ROOT}/backends/imgui_impl_sdlrenderer2.cpp"
+)
+target_include_directories(hp2_imgui PUBLIC "${HP2_IMGUI_ROOT}" "${HP2_IMGUI_ROOT}/backends")
+target_compile_features(hp2_imgui PUBLIC cxx_std_17)
+target_link_libraries(hp2_imgui PUBLIC SDL2::SDL2-static PRIVATE hp2_compile_policy)
+
 hp2_add_engine_object(hp2_xopengldrv XOpenGLDrv ${HP2_XOPENGLDRV_SOURCES})
 target_include_directories(hp2_xopengldrv PUBLIC ${HP2_XOPENGLDRV_INCLUDE_DIRS})
 target_compile_definitions(hp2_xopengldrv PRIVATE
@@ -199,6 +223,12 @@ if(HP2_HAS_NATIVE_TEXT_BACKEND)
         ${HP2_TEXT_PROVIDER_SOURCES}
     )
     target_include_directories(hp2_nativetextcore PUBLIC ${HP2_XOPENGLDRV_INCLUDE_DIRS})
+    if(WIN32 OR EMSCRIPTEN)
+        target_compile_definitions(hp2_nativetextcore PRIVATE HP2_NATIVE_TEXT_FONT_SEAM=1)
+    endif()
+    if(WIN32)
+        target_link_libraries(hp2_nativetextcore PUBLIC SDL2::SDL2-static)
+    endif()
     # Emscripten only builds the FreeType/HarfBuzz ports when asked, and the
     # headers are part of that, so the compile side needs the flag as well as
     # the link side. Without it <ft2build.h> is simply absent.
@@ -226,10 +256,39 @@ if(HP2_HAS_NATIVE_TEXT_BACKEND)
     )
 endif()
 
+set(HP2_IMPORT_ROOT "${HP2_UNREAL_ROOT}/Import")
+set(HP2_IMPORT_SOURCES
+    "${HP2_IMPORT_ROOT}/Src/HP2ImportInputs.cpp"
+    "${HP2_IMPORT_ROOT}/Src/HP2ImportCollect.cpp"
+    "${HP2_IMPORT_ROOT}/Src/HP2ImportPlan.cpp"
+    "${HP2_IMPORT_ROOT}/Src/HP2ImportManifest.cpp"
+    "${HP2_IMPORT_ROOT}/Src/HP2ImportOutput.cpp"
+    "${HP2_IMPORT_ROOT}/Src/HP2ImportIni.cpp"
+)
+if(NOT EMSCRIPTEN)
+    list(APPEND HP2_IMPORT_SOURCES "${HP2_IMPORT_ROOT}/Src/HP2ImportArchive.cpp")
+endif()
+add_library(hp2_import_core STATIC ${HP2_IMPORT_SOURCES})
+target_include_directories(hp2_import_core PUBLIC "${HP2_IMPORT_ROOT}/Inc"
+    PRIVATE "${HP2_IMPORT_ROOT}/Src" "${HP2_UNREAL_ROOT}/Core/Inc")
+target_compile_features(hp2_import_core PUBLIC cxx_std_17)
+target_link_libraries(hp2_import_core PUBLIC hp2_compile_policy PRIVATE utf8proc::utf8proc)
+if(WIN32)
+    target_link_libraries(hp2_import_core PUBLIC bcrypt)
+endif()
+if(NOT EMSCRIPTEN)
+    target_link_libraries(hp2_import_core PRIVATE archive_static)
+    add_executable(hp2_import "${HP2_IMPORT_ROOT}/Src/HP2ImportMain.cpp")
+    target_link_libraries(hp2_import PRIVATE hp2_import_core hp2_compile_policy)
+endif()
+
 function(hp2_add_executable target)
     add_executable("${target}" ${ARGN})
     target_include_directories("${target}" PRIVATE ${HP2_LAUNCH_INCLUDE_DIRS})
     target_link_libraries("${target}" PRIVATE hp2_compile_policy)
+    if(WIN32)
+        target_link_options("${target}" PRIVATE -mconsole)
+    endif()
     target_compile_definitions("${target}" PRIVATE
         __STATIC_LINK=1
         ${HP2_EMPTY_MODULE_API_DEFINITIONS}
@@ -249,13 +308,29 @@ hp2_add_executable(hp2_game
     ${HP2_PATH_SOURCE}
 )
 target_compile_definitions(hp2_game PRIVATE HP2_WITH_CLIENT_PACKAGES=1)
+if(WIN32)
+    set(HP2_WINDOWS_ICON_PATH "${HP2_UNREAL_ROOT}/WinDrv/Src/Res/Game.ico")
+    set(HP2_WINDOWS_MANIFEST_PATH "${HP2_UNREAL_ROOT}/SDLLaunch/Res/HarryPotter2.manifest")
+    set(HP2_WINDOWS_VERSION_RESOURCE "${CMAKE_CURRENT_BINARY_DIR}/HarryPotter2.rc")
+    configure_file(
+        "${HP2_UNREAL_ROOT}/SDLLaunch/Res/HarryPotter2.rc.in"
+        "${HP2_WINDOWS_VERSION_RESOURCE}"
+        @ONLY
+    )
+    target_sources(hp2_game PRIVATE "${HP2_WINDOWS_VERSION_RESOURCE}")
+    set_target_properties(hp2_game PROPERTIES
+        WIN32_EXECUTABLE TRUE
+        OUTPUT_NAME HarryPotter2
+    )
+    target_link_libraries(hp2_game PRIVATE
+        SDL2::SDL2main
+        ole32 shell32 shlwapi ws2_32 winmm imm32 version setupapi
+    )
+endif()
 if(APPLE)
-    set_source_files_properties("${HP2_NATIVE_LAUNCHER_SOURCE}" PROPERTIES
+    set_source_files_properties("${HP2_LAUNCHER_PLATFORM_MAC_SOURCE}" PROPERTIES
         COMPILE_OPTIONS "-fobjc-arc;-std=c++17"
     )
-else()
-    target_compile_definitions(hp2_game PRIVATE
-        HP2_LAUNCHER_QML_DIR="${PROJECT_SOURCE_DIR}/Launcher/Quickshell")
 endif()
 target_link_libraries(hp2_game PRIVATE
     hp2_core
@@ -266,7 +341,12 @@ target_link_libraries(hp2_game PRIVATE
     hp2_alaudio
     hp2_sdldrv
     hp2_xopengldrv
+    hp2_import_core
+    hp2_imgui
 )
+if(NOT EMSCRIPTEN)
+    target_link_libraries(hp2_game PRIVATE nfd::nfd)
+endif()
 if(APPLE)
     target_link_libraries(hp2_game PRIVATE "${HP2_APPKIT_FRAMEWORK}")
 else()
@@ -339,6 +419,9 @@ target_link_libraries(hp2_abi_tests PRIVATE
     hp2_editor_runtime
     hp2_sdldrv
 )
+if(WIN32)
+    target_link_libraries(hp2_abi_tests PRIVATE SDL2::SDL2main)
+endif()
 
 hp2_add_executable(hp2_dxt1_tests
     ${HP2_DXT1_TEST_SOURCE}
@@ -370,7 +453,7 @@ hp2_add_executable(hp2_launcher_tests
     ${HP2_LAUNCHER_TEST_SOURCE}
 )
 target_compile_definitions(hp2_launcher_tests PRIVATE HP2_LAUNCHER_TESTING=1)
-target_link_libraries(hp2_launcher_tests PRIVATE hp2_core)
+target_link_libraries(hp2_launcher_tests PRIVATE hp2_core hp2_import_core)
 
 # Data-root identity contracts: the two-mode bootstrap rule and the structured
 # overlay rejection reason codes (data.manifest_missing, data.hash_mismatch,
@@ -419,6 +502,9 @@ target_link_libraries(hp2_input_contract_tests PRIVATE
     hp2_editor_runtime
     hp2_sdldrv
 )
+if(WIN32)
+    target_link_libraries(hp2_input_contract_tests PRIVATE SDL2::SDL2main)
+endif()
 if(HP2_HAS_NATIVE_TEXT_BACKEND)
     hp2_add_executable(hp2_native_typography_tests
         ${HP2_NATIVE_TYPOGRAPHY_TEST_SOURCE}
@@ -472,6 +558,9 @@ set(HP2_EXECUTABLE_TARGETS
     hp2_save_wire_oracle
     hp2_input_contract_tests
 )
+if(TARGET hp2_import)
+    list(APPEND HP2_EXECUTABLE_TARGETS hp2_import)
+endif()
 
 if(HP2_HAS_NATIVE_TEXT_BACKEND)
     list(APPEND HP2_EXECUTABLE_TARGETS hp2_native_typography_tests)
@@ -535,6 +624,18 @@ function(hp2_add_behavior_test test_name target)
         "HP2_TEST_NAME=${test_name}"
         "HP2_ARTIFACT_DIR=${_hp2_test_artifacts}"
     )
+    if(WIN32)
+        set(_hp2_test_appdata "${_hp2_test_home}/AppData/Roaming")
+        set(_hp2_test_localappdata "${_hp2_test_home}/AppData/Local")
+        file(MAKE_DIRECTORY "${_hp2_test_appdata}" "${_hp2_test_localappdata}")
+        list(APPEND _hp2_test_env
+            "APPDATA=${_hp2_test_appdata}"
+            "LOCALAPPDATA=${_hp2_test_localappdata}"
+            "USERPROFILE=${_hp2_test_home}"
+            "TEMP=${_hp2_test_tmp}"
+            "TMP=${_hp2_test_tmp}"
+        )
+    endif()
     if(HP2_ENABLE_ASAN_UBSAN)
         list(APPEND _hp2_test_env
             "HP2_SANITIZER=asan-ubsan"
@@ -576,6 +677,22 @@ function(hp2_add_behavior_test test_name target)
 endfunction()
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
+if(NOT EMSCRIPTEN)
+    hp2_add_behavior_test(importer_parity "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/Tests/ImporterParityTests.py"
+        "$<TARGET_FILE:hp2_import>"
+        "${PROJECT_SOURCE_DIR}/Build/prepare_retail_data.py"
+    )
+    set_tests_properties(importer_parity PROPERTIES LABELS "fast;data-none")
+    hp2_add_behavior_test(launcher_smoke "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/Tests/LauncherSmoke.py"
+        "$<TARGET_FILE:hp2_game>"
+    )
+    set_tests_properties(launcher_smoke PROPERTIES
+        LABELS "smoke;data-none"
+        RESOURCE_LOCK hp2_gpu
+    )
+endif()
 
 # Deterministic build/observation fingerprint: writes out/<preset>/
 # hp2-state.json at configure time (toolchain, capability gates, data
@@ -939,6 +1056,10 @@ endif()
 # ---------------------------------------------------------------------------
 option(HP2_ENABLE_VULKAN_DRIVER
     "Build the experimental Vulkan render device port (ThirdParty/UT99VulkanDrv)" OFF)
+
+if(WIN32 AND HP2_ENABLE_VULKAN_DRIVER)
+    message(FATAL_ERROR "The experimental Vulkan driver is not supported on Windows builds.")
+endif()
 
 if(HP2_ENABLE_VULKAN_DRIVER)
     set(HP2_VULKANDRV_ROOT "${HP2_THIRD_PARTY_ROOT}/UT99VulkanDrv")

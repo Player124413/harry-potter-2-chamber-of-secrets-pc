@@ -38,6 +38,7 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPOSITORY_ROOT / "Build"))
 import game_test  # noqa: E402
+import hp2_proc  # noqa: E402
 
 REPORT_SCHEMA_VERSION = 1
 SMOKE_NAME = "input_script_smoke"
@@ -299,10 +300,9 @@ def _supervised_run(
         "XDG_CACHE_HOME": str(cache), "LANG": "C", "LC_ALL": "C", "TZ": "UTC",
     })
     try:
-        process = subprocess.Popen(
+        process = hp2_proc.popen_group(
             command, cwd=str(cwd), env=environment,
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            start_new_session=True,
         )
     except OSError as error:
         message = f"{type(error).__name__}: {error}"
@@ -314,21 +314,31 @@ def _supervised_run(
         output, _ = process.communicate(timeout=timeout_seconds)
         return output, process.returncode, False, None
     except subprocess.TimeoutExpired:
-        try:
-            os.killpg(process.pid, 15)
-        except OSError:
-            pass
-        try:
-            output, _ = process.communicate(timeout=game_test.TERMINATION_GRACE_SECONDS)
-        except subprocess.TimeoutExpired:
+        if os.name == "nt":
             try:
-                os.killpg(process.pid, 9)
+                hp2_proc.kill_group(process)
             except OSError:
                 pass
             try:
                 output, _ = process.communicate(timeout=game_test.KILL_GRACE_SECONDS)
             except subprocess.TimeoutExpired as error:
                 output = error.output or b""
+        else:
+            try:
+                os.killpg(process.pid, 15)
+            except OSError:
+                pass
+            try:
+                output, _ = process.communicate(timeout=game_test.TERMINATION_GRACE_SECONDS)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(process.pid, 9)
+                except OSError:
+                    pass
+                try:
+                    output, _ = process.communicate(timeout=game_test.KILL_GRACE_SECONDS)
+                except subprocess.TimeoutExpired as error:
+                    output = error.output or b""
         return output, process.returncode, True, None
 
 

@@ -12,21 +12,39 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <dirent.h>
-#include <fcntl.h>
+#include <filesystem>
 #include <iomanip>
+#include <limits>
 #include <locale>
 #include <random>
 #include <sstream>
+#include <system_error>
+#ifdef HP2_WINDOWS
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#include <io.h>
+#else
+#include <dirent.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
-
+#endif
 namespace HP2Launcher
 {
 namespace
 {
-constexpr off_t MaxThumbnailSize = 16 * 1024 * 1024;
+using StoreMode =
+#ifdef HP2_WINDOWS
+	DWORD;
+#else
+	mode_t;
+#endif
+#ifdef HP2_WINDOWS
+#define mode_t StoreMode
+#endif
+constexpr std::uintmax_t MaxThumbnailSize = 16 * 1024 * 1024;
 enum class Encoding { Utf8, Utf8Bom, Utf16LE, Utf16BE };
 struct Line { std::string text, ending; };
 struct Document
@@ -60,23 +78,91 @@ std::string Join(const std::string& a, const std::string& b)
 {
 	if (a.empty()) return b;
 	if (b.empty()) return a;
+#ifdef HP2_WINDOWS
+	return a.back() == '/' || a.back() == '\\' ? a + b : a + "/" + b;
+#else
 	return a.back() == '/' ? a + b : a + "/" + b;
+#endif
 }
 std::string Parent(const std::string& path)
 {
+#ifdef HP2_WINDOWS
+	const std::size_t slash = path.find_last_of("/\\");
+#else
 	const std::size_t slash = path.find_last_of('/');
-	if (slash == std::string::npos) return ".";
+#endif
+#ifdef HP2_WINDOWS
+	if (slash == 2 && path.size() >= 3 && path[1] == ':') return path.substr(0, 3);
+#endif
 	return slash == 0 ? "/" : path.substr(0, slash);
 }
 std::string Base(const std::string& path)
 {
+#ifdef HP2_WINDOWS
+	const std::size_t slash = path.find_last_of("/\\");
+#else
 	const std::size_t slash = path.find_last_of('/');
+#endif
 	return slash == std::string::npos ? path : path.substr(slash + 1);
 }
 std::string ErrorAt(const char* operation, const std::string& path)
 {
+#ifdef HP2_WINDOWS
+	return std::string(operation) + " '" + path + "': " +
+		std::system_category().message(static_cast<int>(GetLastError()));
+#else
 	return std::string(operation) + " '" + path + "': " + std::strerror(errno);
+#endif
 }
+#ifdef HP2_WINDOWS
+std::filesystem::path FsPath(const std::string& path) { return std::filesystem::u8path(path); }
+DWORD Attributes(const std::string& path)
+{
+	return GetFileAttributesW(FsPath(path).c_str());
+}
+bool IsReparse(DWORD attributes) { return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT); }
+bool IsRegularFile(const std::string& path, std::uintmax_t* size = nullptr)
+{
+	HANDLE file = CreateFileW(FsPath(path).c_str(), FILE_READ_ATTRIBUTES,
+		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+		FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+	if (file == INVALID_HANDLE_VALUE) return false;
+	BY_HANDLE_FILE_INFORMATION data;
+	const bool regular = GetFileInformationByHandle(file, &data) &&
+		!(data.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT));
+	if (regular && size) *size = (static_cast<std::uintmax_t>(data.nFileSizeHigh) << 32) | data.nFileSizeLow;
+	CloseHandle(file);
+	return regular;
+}
+bool IsDirectoryNoFollow(const std::string& path)
+{
+	const DWORD attributes = Attributes(path);
+	return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) && !(attributes & FILE_ATTRIBUTE_REPARSE_POINT);
+}
+#endif
+#ifdef HP2_WINDOWS
+bool FileMetadata(const std::string& path, std::uintmax_t& size, std::int64_t& modified)
+{
+	HANDLE file = CreateFileW(FsPath(path).c_str(), FILE_READ_ATTRIBUTES,
+		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+		FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+	if (file == INVALID_HANDLE_VALUE) return false;
+	BY_HANDLE_FILE_INFORMATION data;
+	if (!GetFileInformationByHandle(file, &data) ||
+		(data.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)))
+	{
+		CloseHandle(file);
+		return false;
+	}
+	size = (static_cast<std::uintmax_t>(data.nFileSizeHigh) << 32) | data.nFileSizeLow;
+	ULARGE_INTEGER ticks;
+	ticks.HighPart = data.ftLastWriteTime.dwHighDateTime;
+	ticks.LowPart = data.ftLastWriteTime.dwLowDateTime;
+	modified = static_cast<std::int64_t>(ticks.QuadPart / 10000000ULL) - 11644473600LL;
+	CloseHandle(file);
+	return true;
+}
+#endif
 char Lower(char value)
 {
 	return static_cast<char>(std::tolower(static_cast<unsigned char>(value)));
@@ -106,6 +192,51 @@ std::string Trim(const std::string& value)
 
 bool ReadFile(const std::string& path, std::string& bytes, mode_t* mode, std::string& error)
 {
+#ifdef HP2_WINDOWS
+	const std::filesystem::path widePath = FsPath(path);
+	HANDLE file = CreateFileW(widePath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+		FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+	if (file == INVALID_HANDLE_VALUE)
+	{
+		error = ErrorAt("Unable to open", path);
+		return false;
+	}
+	BY_HANDLE_FILE_INFORMATION info;
+	if (!GetFileInformationByHandle(file, &info) || (info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)))
+	{
+		CloseHandle(file);
+		error = "Expected a regular non-symlink file at '" + path + "'.";
+		return false;
+	}
+	const std::uint64_t length = (static_cast<std::uint64_t>(info.nFileSizeHigh) << 32) | info.nFileSizeLow;
+	if (length > static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)()))
+	{
+		CloseHandle(file);
+		error = "Unable to read oversized file '" + path + "'.";
+		return false;
+	}
+	bytes.assign(static_cast<std::size_t>(length), '\0');
+	std::size_t done = 0;
+	while (done < bytes.size())
+	{
+		DWORD count = 0;
+		const DWORD request = static_cast<DWORD>((std::min)(bytes.size() - done, static_cast<std::size_t>(MAXDWORD)));
+		if (!::ReadFile(file, &bytes[done], request, &count, nullptr) || count == 0)
+		{
+			CloseHandle(file);
+			error = ErrorAt("Unable to read", path);
+			return false;
+		}
+		done += count;
+	}
+	if (!CloseHandle(file))
+	{
+		error = ErrorAt("Unable to close", path);
+		return false;
+	}
+	if (mode) *mode = info.dwFileAttributes;
+	return true;
+#else
 	struct stat inspected;
 	if (::lstat(path.c_str(), &inspected) != 0)
 	{
@@ -153,6 +284,7 @@ bool ReadFile(const std::string& path, std::string& bytes, mode_t* mode, std::st
 	}
 	if (mode) *mode = opened.st_mode & 07777;
 	return true;
+#endif
 }
 
 void PutUtf8(std::string& text, std::uint32_t cp)
@@ -504,25 +636,178 @@ bool SelectDocument(const LauncherPaths& paths, const char* userName, const char
 	Document& document, bool& exists, mode_t& mode, std::string& error)
 {
 	const std::string userPath = Join(paths.userRoot, userName);
+#ifdef HP2_WINDOWS
+	const DWORD attr = Attributes(userPath);
+	if (attr != INVALID_FILE_ATTRIBUTES)
+#else
 	struct stat info;
 	if (::lstat(userPath.c_str(), &info) == 0)
+#endif
 	{
 		exists = true;
 		std::string bytes;
-		if (!ReadFile(userPath, bytes, &mode, error))
-			return false;
+		if (!ReadFile(userPath, bytes, &mode, error)) return false;
 		std::string decodeError;
-		if (Decode(bytes, document, decodeError))
-			return true;
+		if (Decode(bytes, document, decodeError)) return true;
 		error.clear();
 		return LoadDocument(Join(paths.systemRoot, defaultName), document, nullptr, error);
 	}
-	if (errno != ENOENT) { error = ErrorAt("Unable to inspect", userPath); return false; }
+#ifdef HP2_WINDOWS
+	if (GetLastError() != ERROR_FILE_NOT_FOUND && GetLastError() != ERROR_PATH_NOT_FOUND)
+#else
+	if (errno != ENOENT)
+#endif
+	{ error = ErrorAt("Unable to inspect", userPath); return false; }
 	exists = false;
 	mode = 0600;
 	return LoadDocument(Join(paths.systemRoot, defaultName), document, nullptr, error);
 }
 
+#ifdef HP2_WINDOWS
+bool Stage(const std::string& destination, const std::string& bytes, StoreMode, StagedFile& staged, std::string& error)
+{
+	staged.destination = destination;
+	staged.directory = Parent(destination);
+	if (!IsDirectoryNoFollow(staged.directory))
+	{
+		error = "Staging directory is not a directory: '" + staged.directory + "'.";
+		return false;
+	}
+	std::random_device random;
+	for (int attempt = 0; attempt != 128; ++attempt)
+	{
+		const std::uint64_t nonce = (static_cast<std::uint64_t>(random()) << 32) ^ random();
+		std::ostringstream name;
+		name << staged.directory << "/." << Base(destination) << ".tmp." << std::hex << nonce;
+		staged.temporary = name.str();
+		HANDLE file = CreateFileW(FsPath(staged.temporary).c_str(), GENERIC_WRITE, 0, nullptr,
+			CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+		if (file == INVALID_HANDLE_VALUE)
+		{
+			if (GetLastError() == ERROR_FILE_EXISTS || GetLastError() == ERROR_ALREADY_EXISTS) continue;
+			error = ErrorAt("Unable to create temporary file", staged.temporary);
+			return false;
+		}
+		staged.active = true;
+		std::size_t done = 0;
+		bool okay = true;
+		while (done < bytes.size())
+		{
+			DWORD count = 0;
+			const DWORD request = static_cast<DWORD>((std::min)(bytes.size() - done, static_cast<std::size_t>(MAXDWORD)));
+			if (!::WriteFile(file, bytes.data() + done, request, &count, nullptr) || count == 0) { okay = false; break; }
+			done += count;
+		}
+		if (okay) okay = FlushFileBuffers(file) != 0;
+		if (!CloseHandle(file) && okay) okay = false;
+		if (!okay)
+		{
+			error = ErrorAt("Unable to stage", destination);
+			DeleteFileW(FsPath(staged.temporary).c_str());
+			staged.active = false;
+			return false;
+		}
+		return true;
+	}
+	error = "Unable to allocate an unpredictable temporary filename.";
+	return false;
+}
+void Discard(StagedFile& staged)
+{
+	if (staged.active) DeleteFileW(FsPath(staged.temporary).c_str());
+	staged.active = false;
+}
+bool SyncParent(const std::string&, std::string&) { return true; }
+bool Publish(StagedFile& staged, std::string& error)
+{
+	if (!IsDirectoryNoFollow(staged.directory))
+	{
+		error = "Staging directory is not a directory: '" + staged.directory + "'.";
+		Discard(staged);
+		return false;
+	}
+	if (!MoveFileExW(FsPath(staged.temporary).c_str(), FsPath(staged.destination).c_str(),
+			MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+	{
+		error = ErrorAt("Unable to replace", staged.destination);
+		Discard(staged);
+		return false;
+	}
+	staged.active = false;
+#ifdef HP2_LAUNCHER_TESTING
+	++GPublicationCount;
+	if (GFailAfterPublication == GPublicationCount)
+	{
+		SetLastError(ERROR_WRITE_FAULT);
+		error = ErrorAt("Injected failure after replacing", staged.destination);
+		return false;
+	}
+#endif
+	return true;
+}
+bool RestorePublishedFile(const std::string& destination, bool existed, StagedFile& original, std::string& error)
+{
+	if (existed)
+	{
+		if (!original.active || !MoveFileExW(FsPath(original.temporary).c_str(), FsPath(destination).c_str(),
+				MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+		{
+			error = ErrorAt("Unable to restore", destination);
+			return false;
+		}
+		original.active = false;
+	}
+	else if (!DeleteFileW(FsPath(destination).c_str()) && GetLastError() != ERROR_FILE_NOT_FOUND)
+	{
+		error = ErrorAt("Unable to remove partially published file", destination);
+		return false;
+	}
+	return true;
+}
+bool Backup(const std::string& original, const std::string& bytes, StoreMode mode, std::string& error)
+{
+	const std::string backup = original + ".bak";
+	if (IsRegularFile(backup)) return true;
+	if (Attributes(backup) != INVALID_FILE_ATTRIBUTES)
+	{
+		error = "Backup path is not a regular non-symlink file: '" + backup + "'.";
+		return false;
+	}
+	StagedFile staged;
+	if (!Stage(backup, bytes, mode, staged, error)) return false;
+	if (!CreateHardLinkW(FsPath(backup).c_str(), FsPath(staged.temporary).c_str(), nullptr))
+	{
+		if (GetLastError() == ERROR_ALREADY_EXISTS && IsRegularFile(backup)) { Discard(staged); return true; }
+		error = ErrorAt("Unable to publish backup", backup);
+		Discard(staged);
+		return false;
+	}
+	Discard(staged);
+	return true;
+}
+bool Directory(const std::string& path) { return IsDirectoryNoFollow(path); }
+bool Names(const std::string& path, std::vector<std::string>& names, bool missingOkay, std::string& error)
+{
+	names.clear();
+	if (!IsDirectoryNoFollow(path))
+	{
+		if (missingOkay && Attributes(path) == INVALID_FILE_ATTRIBUTES) return true;
+		error = "Unable to open directory '" + path + "'.";
+		return false;
+	}
+	std::error_code ec;
+	std::filesystem::directory_iterator iterator(FsPath(path), ec), end;
+	while (!ec && iterator != end)
+	{
+		const auto u8 = iterator->path().filename().u8string();
+		names.emplace_back(u8.begin(), u8.end());
+		iterator.increment(ec);
+	}
+	if (ec) { error = "Unable to read directory '" + path + "': " + ec.message(); return false; }
+	std::sort(names.begin(), names.end());
+	return true;
+}
+#else
 bool WriteAll(int fd, const std::string& bytes)
 {
 	std::size_t done = 0;
@@ -686,6 +971,7 @@ bool Names(const std::string& path, std::vector<std::string>& names, bool missin
 	std::sort(names.begin(), names.end());
 	return true;
 }
+#endif
 bool SaveName(const std::string& name, int& index, std::string& stem)
 {
 	const std::string lower = Lowercase(name);
@@ -709,8 +995,13 @@ std::string Thumbnail(const std::string& directory, const std::vector<std::strin
 	{
 		if (Lowercase(name) != wanted) continue;
 		const std::string path = Join(directory, name);
+#ifdef HP2_WINDOWS
+		std::uintmax_t size;
+		if (IsRegularFile(path, &size) && size <= MaxThumbnailSize) return path;
+#else
 		struct stat info;
 		if (::lstat(path.c_str(), &info) == 0 && S_ISREG(info.st_mode) && info.st_size >= 0 && info.st_size <= MaxThumbnailSize) return path;
+#endif
 	}
 	return "";
 }
@@ -723,8 +1014,14 @@ void SavesIn(const std::string& directory, const std::vector<std::string>& names
 		std::string stem;
 		if (!SaveName(name, index, stem)) continue;
 		const std::string path = Join(directory, name);
+#ifdef HP2_WINDOWS
+		std::uintmax_t fileSize;
+		std::int64_t modified;
+		if (!FileMetadata(path, fileSize, modified) || fileSize == 0) continue;
+#else
 		struct stat info;
 		if (::lstat(path.c_str(), &info) != 0 || !S_ISREG(info.st_mode) || info.st_size <= 0) continue;
+#endif
 		SaveRecord save;
 		save.slot = slot;
 		save.saveIndex = index;
@@ -733,8 +1030,13 @@ void SavesIn(const std::string& directory, const std::vector<std::string>& names
 		save.thumbnailPath = Thumbnail(directory, names, stem);
 		save.displayName = slotted ? "Slot " + std::to_string(slot) + " - Save " + std::to_string(index)
 			: "Save " + std::to_string(index);
+#ifdef HP2_WINDOWS
+		save.size = fileSize;
+		save.modifiedSeconds = modified;
+#else
 		save.size = info.st_size;
 		save.modifiedSeconds = info.st_mtime;
+#endif
 		saves.push_back(save);
 	}
 }
@@ -973,7 +1275,13 @@ bool IsValidUtf8(const std::string& text)
 }
 bool IsAbsolutePath(const std::string& path)
 {
+#ifdef HP2_WINDOWS
+	if (path.empty() || path.find('\0') != std::string::npos || !IsValidUtf8(path)) return false;
+	const std::filesystem::path native = FsPath(path);
+	return native.is_absolute() && native.has_root_name() && native.has_root_directory();
+#else
 	return !path.empty() && path.front() == '/' && path.find('\0') == std::string::npos;
+#endif
 }
 bool SourceText(DataSource source, const char*& text)
 {
@@ -1004,6 +1312,15 @@ bool LoadLauncherDocument(
 		return false;
 	}
 	const std::string path = Join(launcherRoot, "Launcher.ini");
+#ifdef HP2_WINDOWS
+	if (Attributes(path) == INVALID_FILE_ATTRIBUTES)
+	{
+		if (GetLastError() != ERROR_FILE_NOT_FOUND && GetLastError() != ERROR_PATH_NOT_FOUND)
+		{
+			error = ErrorAt("Unable to inspect", path);
+			return false;
+		}
+#else
 	struct stat info;
 	if (::lstat(path.c_str(), &info) != 0)
 	{
@@ -1012,6 +1329,7 @@ bool LoadLauncherDocument(
 			error = ErrorAt("Unable to inspect", path);
 			return false;
 		}
+#endif
 		document = Document();
 		exists = false;
 		mode = 0600;
@@ -1058,6 +1376,7 @@ bool PublishLauncherDocument(
 	Discard(rollback);
 	return true;
 }
+#ifndef HP2_WINDOWS
 bool OpenDirectoryNoFollow(const std::string& path, int& fd, mode_t& mode, std::string& error)
 {
 	fd = ::open(path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
@@ -1584,6 +1903,117 @@ bool RemovePublishedProfile(const std::string& profileRoot, std::string& error)
 	errno = saved;
 	return removed;
 }
+#else
+bool ValidateLegacyTree(const std::string& path, bool missingOkay, std::string& error)
+{
+	const DWORD attr = Attributes(path);
+	if (attr == INVALID_FILE_ATTRIBUTES)
+	{
+		if (missingOkay && (GetLastError() == ERROR_FILE_NOT_FOUND || GetLastError() == ERROR_PATH_NOT_FOUND)) return true;
+		error = ErrorAt("Unable to inspect legacy profile item", path);
+		return false;
+	}
+	if (attr & FILE_ATTRIBUTE_REPARSE_POINT)
+	{
+		error = "Legacy profile item is not a regular non-symlink file or directory: '" + path + "'.";
+		return false;
+	}
+	if (!(attr & FILE_ATTRIBUTE_DIRECTORY)) return true;
+	std::vector<std::string> children;
+	if (!Names(path, children, false, error)) return false;
+	for (const auto& child : children)
+		if (!ValidateLegacyTree(Join(path, child), false, error)) return false;
+	return true;
+}
+bool CopyLegacyTree(const std::string& source, const std::string& destination, std::string& error)
+{
+	const DWORD attr = Attributes(source);
+	if (attr == INVALID_FILE_ATTRIBUTES || (attr & FILE_ATTRIBUTE_REPARSE_POINT))
+	{
+		error = "Legacy profile item is not a regular non-symlink file or directory: '" + source + "'.";
+		return false;
+	}
+	if (attr & FILE_ATTRIBUTE_DIRECTORY)
+	{
+		if (!CreateDirectoryW(FsPath(destination).c_str(), nullptr))
+		{
+			error = ErrorAt("Unable to create staged profile directory", destination);
+			return false;
+		}
+		std::vector<std::string> children;
+		if (!Names(source, children, false, error)) return false;
+		for (const auto& child : children)
+			if (!CopyLegacyTree(Join(source, child), Join(destination, child), error)) return false;
+		return true;
+	}
+	HANDLE input = CreateFileW(FsPath(source).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+		FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+	if (input == INVALID_HANDLE_VALUE)
+	{
+		error = ErrorAt("Unable to open legacy profile file", source);
+		return false;
+	}
+	BY_HANDLE_FILE_INFORMATION info;
+	if (!GetFileInformationByHandle(input, &info) || (info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)))
+	{
+		CloseHandle(input);
+		error = "Legacy profile item is not a regular non-symlink file: '" + source + "'.";
+		return false;
+	}
+	HANDLE output = CreateFileW(FsPath(destination).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (output == INVALID_HANDLE_VALUE)
+	{
+		CloseHandle(input);
+		error = ErrorAt("Unable to create staged profile file", destination);
+		return false;
+	}
+	char buffer[32768];
+	bool okay = true;
+	for (;;)
+	{
+		DWORD got = 0;
+		if (!::ReadFile(input, buffer, sizeof(buffer), &got, nullptr)) { okay = false; break; }
+		if (got == 0) break;
+		DWORD offset = 0;
+		while (offset < got)
+		{
+			DWORD written = 0;
+			if (!::WriteFile(output, buffer + offset, got - offset, &written, nullptr) || written == 0) { okay = false; break; }
+			offset += written;
+		}
+		if (!okay) break;
+	}
+	if (okay) okay = FlushFileBuffers(output) != 0;
+	CloseHandle(output);
+	CloseHandle(input);
+	if (!okay)
+	{
+		error = ErrorAt("Unable to copy legacy profile file", source);
+		DeleteFileW(FsPath(destination).c_str());
+	}
+	return okay;
+}
+bool RemoveTreeNoFollow(const std::string& path, std::string& error)
+{
+	const DWORD attr = Attributes(path);
+	if (attr == INVALID_FILE_ATTRIBUTES) return GetLastError() == ERROR_FILE_NOT_FOUND || GetLastError() == ERROR_PATH_NOT_FOUND;
+	if (attr & FILE_ATTRIBUTE_REPARSE_POINT)
+	{
+		error = "Staged profile contains a symlink or irregular file: '" + path + "'.";
+		return false;
+	}
+	if (attr & FILE_ATTRIBUTE_DIRECTORY)
+	{
+		std::vector<std::string> children;
+		if (!Names(path, children, false, error)) return false;
+		for (const auto& child : children)
+			if (!RemoveTreeNoFollow(Join(path, child), error)) return false;
+		if (!RemoveDirectoryW(FsPath(path).c_str())) { error = ErrorAt("Unable to remove staged profile directory", path); return false; }
+	}
+	else if (!DeleteFileW(FsPath(path).c_str())) { error = ErrorAt("Unable to remove staged profile file", path); return false; }
+	return true;
+}
+#endif
 }
 #ifdef HP2_LAUNCHER_TESTING
 void SetLauncherPublishFailureForTesting(int publicationIndex)
@@ -1681,7 +2111,122 @@ bool PrepareDataSourceProfile(
 		error = "Data source configuration contains an invalid selection.";
 		return false;
 	}
+#ifdef HP2_WINDOWS
 	if (!Directory(launcherRoot))
+	{
+		error = "Launcher root is not a directory: '" + launcherRoot + "'.";
+		return false;
+	}
+	const std::string profilesRoot = Join(launcherRoot, "Profiles");
+	const std::string requestedProfile = Join(profilesRoot, sourceName);
+	DWORD attr = Attributes(profilesRoot);
+	if (attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY))
+	{
+		error = "Profiles root is not a directory: '" + profilesRoot + "'.";
+		return false;
+	}
+	if (attr != INVALID_FILE_ATTRIBUTES && IsReparse(attr))
+	{
+		error = "Profiles root is not a directory: '" + profilesRoot + "'.";
+		return false;
+	}
+	attr = Attributes(requestedProfile);
+	if (attr != INVALID_FILE_ATTRIBUTES)
+	{
+		if (!(attr & FILE_ATTRIBUTE_DIRECTORY) || IsReparse(attr))
+		{
+			error = "Profile root is not a directory: '" + requestedProfile + "'.";
+			return false;
+		}
+		profileRoot = requestedProfile;
+		return true;
+	}
+	if (GetLastError() != ERROR_FILE_NOT_FOUND && GetLastError() != ERROR_PATH_NOT_FOUND)
+	{
+		error = ErrorAt("Unable to inspect profile", requestedProfile);
+		return false;
+	}
+	Document document;
+	bool documentExists;
+	StoreMode documentMode;
+	std::string originalDocument;
+	if (!LoadLauncherDocument(launcherRoot, document, documentExists, documentMode, originalDocument, error)) return false;
+	bool hasLegacyProfile = false;
+	std::string legacyProfile;
+	if (Get(document, "DataSources", "LegacyProfile", legacyProfile))
+	{
+		DataSource legacySource;
+		if (!ParseSource(legacyProfile, legacySource))
+		{
+			error = "Launcher data source configuration has an invalid LegacyProfile marker.";
+			return false;
+		}
+		hasLegacyProfile = true;
+	}
+	static const char* const LegacyItems[] = {"Game.ini", "User.ini", "Save", "Cache"};
+	if (!hasLegacyProfile)
+		for (const char* item : LegacyItems)
+			if (!ValidateLegacyTree(Join(launcherRoot, item), true, error)) return false;
+	if (attr == INVALID_FILE_ATTRIBUTES && !CreateDirectoryW(FsPath(profilesRoot).c_str(), nullptr) &&
+		GetLastError() != ERROR_ALREADY_EXISTS)
+	{
+		error = ErrorAt("Unable to create directory", profilesRoot);
+		return false;
+	}
+	if (!IsDirectoryNoFollow(profilesRoot))
+	{
+		error = "Expected a directory at '" + profilesRoot + "'.";
+		return false;
+	}
+	std::random_device random;
+	std::string temporary;
+	bool created = false;
+	for (int attempt = 0; attempt != 128; ++attempt)
+	{
+		const std::uint64_t nonce = (static_cast<std::uint64_t>(random()) << 32) ^ random();
+		std::ostringstream name;
+		name << profilesRoot << "/." << sourceName << ".tmp." << std::hex << nonce;
+		temporary = name.str();
+		if (CreateDirectoryW(FsPath(temporary).c_str(), nullptr)) { created = true; break; }
+		if (GetLastError() != ERROR_ALREADY_EXISTS) { error = ErrorAt("Unable to create staged profile", temporary); return false; }
+	}
+	if (!created) { error = "Unable to allocate an unpredictable staged profile directory."; return false; }
+	bool copied = true;
+	if (!hasLegacyProfile)
+		for (const char* item : LegacyItems)
+			if (Attributes(Join(launcherRoot, item)) != INVALID_FILE_ATTRIBUTES &&
+				!CopyLegacyTree(Join(launcherRoot, item), Join(temporary, item), error)) { copied = false; break; }
+	if (!copied)
+	{
+		std::string ignored;
+		RemoveTreeNoFollow(temporary, ignored);
+		return false;
+	}
+	if (!MoveFileExW(FsPath(temporary).c_str(), FsPath(requestedProfile).c_str(), MOVEFILE_WRITE_THROUGH))
+	{
+		error = ErrorAt("Unable to publish profile", requestedProfile);
+		std::string ignored;
+		RemoveTreeNoFollow(temporary, ignored);
+		return false;
+	}
+	if (!hasLegacyProfile)
+	{
+		Set(document, "DataSources", "LegacyProfile", sourceName);
+		if (!PublishLauncherDocument(launcherRoot, document, documentExists, documentMode, originalDocument, error))
+		{
+			const std::string publicationError = error;
+			std::string removalError;
+			const bool removed = RemoveTreeNoFollow(requestedProfile, removalError);
+			error = publicationError;
+			if (!removed) error += " Profile rollback failed: " + removalError;
+			return false;
+		}
+	}
+	profileRoot = requestedProfile;
+	return true;
+#else
+	struct stat launcherInfo;
+	if (::lstat(launcherRoot.c_str(), &launcherInfo) != 0 || !S_ISDIR(launcherInfo.st_mode))
 	{
 		error = "Launcher root is not a directory: '" + launcherRoot + "'.";
 		return false;
@@ -1795,6 +2340,7 @@ bool PrepareDataSourceProfile(
 	}
 	profileRoot = requestedProfile;
 	return true;
+#endif
 }
 
 bool ValidateLauncherSettings(const LauncherSettings& settings, std::string& error)
@@ -1837,16 +2383,25 @@ bool DiscoverSaves(const std::string& userRoot, std::vector<SaveRecord>& saves, 
 {
 	saves.clear(); error.clear();
 	const std::string root = Join(userRoot, "Save");
-	struct stat rootInfo;
-	if (::lstat(root.c_str(), &rootInfo) != 0)
+#ifdef HP2_WINDOWS
+	DWORD rootAttributes = Attributes(root);
+	if (rootAttributes == INVALID_FILE_ATTRIBUTES)
 	{
-		if (errno == ENOENT)
-			return true;
+		if (GetLastError() == ERROR_FILE_NOT_FOUND || GetLastError() == ERROR_PATH_NOT_FOUND) return true;
 		error = ErrorAt("Unable to inspect save directory", root);
 		return false;
 	}
-	if (!S_ISDIR(rootInfo.st_mode))
-		return true;
+	if (!(rootAttributes & FILE_ATTRIBUTE_DIRECTORY) || IsReparse(rootAttributes)) return true;
+#else
+	struct stat rootInfo;
+	if (::lstat(root.c_str(), &rootInfo) != 0)
+	{
+		if (errno == ENOENT) return true;
+		error = ErrorAt("Unable to inspect save directory", root);
+		return false;
+	}
+	if (!S_ISDIR(rootInfo.st_mode)) return true;
+#endif
 	std::vector<std::string> rootNames;
 	if (!Names(root, rootNames, false, error)) return false;
 	SavesIn(root, rootNames, -1, false, saves);
@@ -1855,8 +2410,12 @@ bool DiscoverSaves(const std::string& userRoot, std::vector<SaveRecord>& saves, 
 		int slot;
 		if (!SlotName(name, slot)) continue;
 		const std::string path = Join(root, name);
+#ifdef HP2_WINDOWS
+		if (!IsDirectoryNoFollow(path)) continue;
+#else
 		struct stat info;
 		if (::lstat(path.c_str(), &info) != 0 || !S_ISDIR(info.st_mode)) continue;
+#endif
 		std::vector<std::string> slotNames;
 		if (!Names(path, slotNames, false, error)) return false;
 		SavesIn(path, slotNames, slot, true, saves);

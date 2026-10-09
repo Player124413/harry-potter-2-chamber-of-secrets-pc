@@ -32,11 +32,8 @@
 #include FT_OUTLINE_H
 #include <hb.h>
 #include <hb-ft.h>
-#if defined(__EMSCRIPTEN__)
-// Fontconfig is a native library with its own font cache. Under Emscripten
-// the shell resolves families and fetches the font bytes instead; shaping,
-// fallback and the glyph cache are the same code either way.
-#include "NativeTextFreeTypeEmscripten.h"
+#if HP2_NATIVE_TEXT_FONT_SEAM
+#include "NativeTextFontSeam.h"
 #else
 #include <fontconfig/fontconfig.h>
 #endif
@@ -87,9 +84,7 @@ namespace Hp2NativeText
 		{
 			std::call_once(GFontStackInitFlag, []()
 			{
-#if defined(__EMSCRIPTEN__)
-				// No Fontconfig to initialise; family resolution is done by the
-				// page through the seam in NativeTextFreeTypeEmscripten.cpp.
+#if HP2_NATIVE_TEXT_FONT_SEAM
 				GFontStackOk = FT_Init_FreeType(&GFtLibrary) == 0;
 #else
 				GFontStackOk = (FcInit() != FcFalse) && FT_Init_FreeType(&GFtLibrary) == 0;
@@ -243,7 +238,7 @@ namespace Hp2NativeText
 			// bytes are kept in a process-global arena that is never freed
 			// rather than being owned by the face.
 			std::vector<unsigned char> FontBytes;
-			if (!Hp2NativeTextEmscripten::LoadFontFile(File, FontBytes))
+			if (!Hp2NativeTextFontSeam::LoadFontFile(File, FontBytes))
 				return NULL;
 			GBackedFontBytes.push_back(std::move(FontBytes));
 			const std::vector<unsigned char>& Backing = GBackedFontBytes.back();
@@ -289,11 +284,11 @@ namespace Hp2NativeText
 				PointSize > static_cast<double>(std::numeric_limits<uint32_t>::max()) / 64.0)
 				return NULL;
 
-#if defined(__EMSCRIPTEN__)
-			std::string Url;
-			if (!Hp2NativeTextEmscripten::ResolveFamilyFile(Family, Bold, Url, 0, false))
+#if HP2_NATIVE_TEXT_FONT_SEAM
+			std::string File;
+			if (!Hp2NativeTextFontSeam::ResolveFamilyFile(Family, Bold, File, 0, false))
 				return NULL;
-			return LoadFaceFromFile(Url, 0, PointSize);
+			return LoadFaceFromFile(File, 0, PointSize);
 #else
 			FcPattern* Pattern = FcPatternCreate();
 			if (!Pattern)
@@ -303,13 +298,11 @@ namespace Hp2NativeText
 			FcPatternAddDouble(Pattern, FC_SIZE, PointSize);
 			FcConfigSubstitute(NULL, Pattern, FcMatchPattern);
 			FcDefaultSubstitute(Pattern);
-
 			FcResult MatchResult = FcResultNoMatch;
 			FcPattern* Matched = FcFontMatch(NULL, Pattern, &MatchResult);
 			FcPatternDestroy(Pattern);
 			if (!Matched)
 				return NULL;
-
 			FcChar8* FileValue = NULL;
 			int FaceIndex = 0;
 			if (FcPatternGetString(Matched, FC_FILE, 0, &FileValue) != FcResultMatch || !FileValue)
@@ -320,7 +313,6 @@ namespace Hp2NativeText
 			FcPatternGetInteger(Matched, FC_INDEX, 0, &FaceIndex);
 			const std::string File(reinterpret_cast<const char*>(FileValue));
 			FcPatternDestroy(Matched);
-
 			return LoadFaceFromFile(File, FaceIndex, PointSize);
 #endif
 		}
@@ -405,13 +397,13 @@ namespace Hp2NativeText
 			};
 			for (const char* Candidate : GFallbackFamilies)
 			{
-				if (!Hp2NativeTextEmscripten::FamilyHasCodePoint(Candidate, CodePoint))
+				if (!Hp2NativeTextFontSeam::FamilyHasCodePoint(Candidate, CodePoint))
 					continue;
 				std::string Url;
 				// This is the Fontconfig charset match, replaced: pick the first
 				// staged face that actually has the glyph rather than walking a
 				// list of family names that all resolve to the same file.
-				if (!Hp2NativeTextEmscripten::ResolveFamilyFile(Candidate, Bold, Url,
+				if (!Hp2NativeTextFontSeam::ResolveFamilyFile(Candidate, Bold, Url,
 						CodePoint, true))
 				{
 					continue;
@@ -423,6 +415,13 @@ namespace Hp2NativeText
 					break;
 				}
 			}
+			Cache.emplace(CodePoint, Result);
+			return Result;
+#elif defined(_WIN32)
+			std::string File;
+			if (Hp2NativeTextFontSeam::ResolveFamilyFile("Liberation Sans", Bold, File,
+					CodePoint, true))
+				Result = LoadFaceFromFile(File, 0, PointSize);
 			Cache.emplace(CodePoint, Result);
 			return Result;
 #else
@@ -1136,7 +1135,7 @@ namespace Hp2NativeText
 	{
 #if defined(__EMSCRIPTEN__)
 		return strcmp(GBrowserLastReason, "text.font_not_staged") == 0 &&
-			Hp2NativeTextEmscripten::FontIsPresent();
+			Hp2NativeTextFontSeam::FontIsPresent();
 #else
 		return false;
 #endif
@@ -1156,7 +1155,7 @@ namespace Hp2NativeText
 		// life of the page. Reporting unavailable here is still correct -- the
 		// caller keeps the bitmap path -- and the driver retries once the face
 		// exists, not on a timer.
-		if (!Hp2NativeTextEmscripten::FontIsPresent())
+		if (!Hp2NativeTextFontSeam::FontIsPresent())
 		{
 			return ReportProbe(OutReasonCode, "text.font_not_staged", false);
 		}

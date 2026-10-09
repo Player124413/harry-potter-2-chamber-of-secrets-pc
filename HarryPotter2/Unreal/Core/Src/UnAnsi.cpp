@@ -2176,7 +2176,11 @@ CORE_API INT appStrcmp( const TCHAR* String1, const TCHAR* String2 )
 CORE_API INT appStricmp( const TCHAR* String1, const TCHAR* String2 )
 {
 #if UNICODE
+#if defined(HP2_WINDOWS)
+	return _wcsicmp( String1, String2 );
+#else
 	return wcscasecmp( String1, String2 );
+#endif
 #else
 	return stricmp( String1, String2 );
 #endif
@@ -2241,7 +2245,11 @@ CORE_API INT appStrncmp( const TCHAR* A, const TCHAR* B, INT Count )
 CORE_API INT appStrnicmp( const TCHAR* A, const TCHAR* B, INT Count )
 {
 #if UNICODE
+#if defined(HP2_WINDOWS)
+	return _wcsnicmp( A, B, Count );
+#else
 	return wcsncasecmp( A, B, Count );
+#endif
 #else
 	return strnicmp( A, B, Count );
 #endif

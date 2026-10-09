@@ -47,7 +47,7 @@
 #include "HP2Paths.h"
 #include "HP2StaticPackages.h"
 #include "FMallocAnsi.h"
-#include "FFileManagerUnix.h"
+#include "FFileManagerPlatformHP2.h"
 #include "FFeedbackContextAnsi.h"
 #include "FConfigCacheIni.h"
 #include "SDLDrv.h"
@@ -96,7 +96,7 @@ public:
 FSilentLog RuntimeLog;
 FCapturingError RuntimeError;
 FFeedbackContextAnsi RuntimeWarn;
-FFileManagerUnix RuntimeFileManager;
+FFileManagerPlatformHP2 RuntimeFileManager;
 FMallocAnsi RuntimeMalloc;
 
 const char* GTestName = "input_contracts";

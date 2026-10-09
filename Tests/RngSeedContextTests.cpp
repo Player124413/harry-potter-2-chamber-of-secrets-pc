@@ -1,18 +1,43 @@
 /*=============================================================================
-	RngSeedContextTests.cpp: Exact Unix Context seed bootstrap contract.
+	RngSeedContextTests.cpp: Exact Context seed bootstrap contract.
 =============================================================================*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/wait.h>
-#include <unistd.h>
-
+#include <string>
+#include <vector>
 #include "Core.h"
+#include "Support/HP2TestProcess.h"
 
 extern void appFlushRandTrace();
 
+#include <filesystem>
+#include <fstream>
+#if defined(_WIN32)
+#include <cstdlib>
+#else
+#include <unistd.h>
+#endif
+
 namespace
 {
+	void SetEnvironment(const char* Name, const char* Value)
+	{
+#if defined(_WIN32)
+		(void)_putenv_s(Name, Value);
+#else
+		(void)setenv(Name, Value, 1);
+#endif
+	}
+
+	void UnsetEnvironment(const char* Name)
+	{
+#if defined(_WIN32)
+		(void)_putenv_s(Name, "");
+#else
+		(void)unsetenv(Name);
+#endif
+	}
 	void Require( int Condition, const char* Message )
 	{
 		if( !Condition )
@@ -33,30 +58,10 @@ namespace
 
 	void RequireInvalidSeedFailsBeforeAppInit()
 	{
-		int Pipe[2];
-		Require( pipe(Pipe)==0, "could not create stderr pipe" );
-		const pid_t Child = fork();
-		Require( Child>=0, "could not fork invalid seed case" );
-		if( Child==0 )
-		{
-			close( Pipe[0] );
-			Require( dup2(Pipe[1],STDERR_FILENO)>=0, "could not capture child stderr" );
-			close( Pipe[1] );
-			setenv( "HP2_RNG_SEED", "invalid", 1 );
-			__Context::StaticInit();
-			_exit(0);
-		}
-
-		close( Pipe[1] );
-		char Error[256];
-		const ssize_t Length = read( Pipe[0], Error, sizeof(Error)-1 );
-		Require( Length>=0, "could not read child stderr" );
-		Error[Length] = 0;
-		close( Pipe[0] );
-		int Status = 0;
-		Require( waitpid(Child,&Status,0)==Child, "could not wait for invalid seed case" );
-		Require( WIFEXITED(Status) && WEXITSTATUS(Status)==1, "invalid seed did not exit one" );
-
+		std::string Error;
+		const int Status = HP2TestProcess::RunSelf(
+			{"invalid-seed-child"}, {"HP2_RNG_SEED=invalid"}, Error);
+		Require(Status == 1, "invalid seed did not exit one");
 		char Expected[160];
 		snprintf(
 			Expected,
@@ -64,7 +69,7 @@ namespace
 			"Invalid HP2_RNG_SEED: expected an unsigned decimal value from 0 to %u\n",
 			(unsigned)RAND_MAX
 		);
-		Require( !strcmp(Error,Expected), "invalid seed stderr changed" );
+		Require(Error == Expected, "invalid seed stderr changed");
 	}
 
 	void RequireTraceCanArmAfterContext()
@@ -79,27 +84,33 @@ namespace
 			ArtifactDirectory
 		);
 		Require( PathLength>0 && (size_t)PathLength<sizeof(TracePath), "trace path buffer too small" );
-		unsetenv( "HP2_RNG_TRACE" );
-		setenv( "HP2_RNG_SEED", "42", 1 );
+		UnsetEnvironment("HP2_RNG_TRACE");
+		SetEnvironment("HP2_RNG_SEED", "42");
 		__Context::StaticInit();
-		Require( setenv("HP2_RNG_TRACE",TracePath,1)==0, "could not arm post-context trace" );
+		SetEnvironment("HP2_RNG_TRACE", TracePath);
 		appRand();
 		appFlushRandTrace();
-		Require( access(TracePath,F_OK)==0, "Context initialized tracing before trace environment existed" );
+		std::ifstream Trace(TracePath, std::ios::binary);
+		Require(Trace.good(), "Context initialized tracing before trace environment existed");
 	}
 }
 
 int main( int ArgC, char* ArgV[] )
 {
 	Require( ArgC==2, "expected default, diagnostic, invalid, or late_trace mode" );
+	if( !strcmp(ArgV[1],"invalid-seed-child") )
+	{
+		__Context::StaticInit();
+		return 0;
+	}
 	if( !strcmp(ArgV[1],"default") )
 	{
-		unsetenv( "HP2_RNG_SEED" );
+		UnsetEnvironment("HP2_RNG_SEED");
 		RequireNextRandAfterContext( 42 );
 	}
 	else if( !strcmp(ArgV[1],"diagnostic") )
 	{
-		setenv( "HP2_RNG_SEED", "0", 1 );
+		SetEnvironment("HP2_RNG_SEED", "0");
 		RequireNextRandAfterContext( 1 );
 	}
 	else if( !strcmp(ArgV[1],"invalid") )

@@ -12,7 +12,7 @@
 #include "HP2Paths.h"
 #include "HP2StaticPackages.h"
 #include "FMallocAnsi.h"
-#include "FFileManagerUnix.h"
+#include "FFileManagerPlatformHP2.h"
 #include "FFeedbackContextAnsi.h"
 #include "FConfigCacheIni.h"
 
@@ -23,6 +23,9 @@
 #include <cstring>
 #include <new>
 #include <type_traits>
+#include <filesystem>
+#include <random>
+#include <string>
 
 // Keep the pre-appInit path bootstrap in this executable's sole translation
 // unit rather than requiring a separate test-only CMake source edge.
@@ -209,10 +212,34 @@ namespace
 			|| appStrcmp(LoadURL, TEXT("?load=17")) != 0)
 			return Fail("load-game travel must use the relative ?load=<slot> FURL");
 
-		TCHAR FileToken[128];
-		if (!appFilePathToFURLToken(
-				TEXT("/tmp/Profile/Save0.usa"), FileToken, ARRAY_COUNT(FileToken))
-			|| appStrcmp(FileToken, TEXT("\\tmp\\Profile\\Save0.usa")) != 0)
+		TCHAR FileToken[1024];
+		TCHAR NativePath[1024];
+		std::random_device Random;
+		std::string Unique = "hp2-abi-";
+		for (INT Index = 0; Index < 32; ++Index)
+			Unique += "0123456789abcdef"[Random() & 0xf];
+		std::filesystem::path NativeFilePath = std::filesystem::temp_directory_path();
+		NativeFilePath /= Unique;
+		NativeFilePath /= "Profile";
+		NativeFilePath /= "Save0.usa";
+		ANSICHAR NativeUtf8[1024];
+#if defined(HP2_WINDOWS)
+		if (!appToUtf8InPlace(NativeUtf8, NativeFilePath.c_str(), ARRAY_COUNT(NativeUtf8)))
+			return Fail("temporary native file path did not fit UTF-8 buffer");
+#else
+		const int NativeUtf8Length = std::snprintf(NativeUtf8, ARRAY_COUNT(NativeUtf8), "%s", NativeFilePath.c_str());
+		if (NativeUtf8Length < 0 || NativeUtf8Length >= static_cast<int>(ARRAY_COUNT(NativeUtf8)))
+			return Fail("temporary native file path did not fit UTF-8 buffer");
+#endif
+		if (!appFromUtf8InPlace(NativePath, NativeUtf8, ARRAY_COUNT(NativePath)))
+			return Fail("temporary native file path did not fit TCHAR buffer");
+		TCHAR ExpectedFileToken[1024];
+		INT PathIndex = 0;
+		for (; PathIndex < ARRAY_COUNT(ExpectedFileToken) - 1 && NativePath[PathIndex]; ++PathIndex)
+			ExpectedFileToken[PathIndex] = NativePath[PathIndex] == TEXT('/') ? TEXT('\\') : NativePath[PathIndex];
+		ExpectedFileToken[PathIndex] = 0;
+		if (!appFilePathToFURLToken(NativePath, FileToken, ARRAY_COUNT(FileToken))
+			|| appStrcmp(FileToken, ExpectedFileToken) != 0)
 			return Fail("absolute native file path was not encoded as an FURL token");
 		if (!appFilePathToFURLToken(
 				TEXT("../Maps/Entry.unr?Name=Player"), FileToken, ARRAY_COUNT(FileToken))
@@ -603,7 +630,7 @@ namespace
 	FSilentLog RuntimeLog;
 	FCapturingError RuntimeError;
 	FFeedbackContextAnsi RuntimeWarn;
-	FFileManagerUnix RuntimeFileManager;
+	FFileManagerPlatformHP2 RuntimeFileManager;
 	FMallocAnsi RuntimeMalloc;
 
 	class FRecordingBrushTracker : public FMovingBrushTrackerBase

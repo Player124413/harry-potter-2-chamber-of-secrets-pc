@@ -7,16 +7,21 @@
 
 #include "HP2PortableSha256.h"
 
-#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <map>
 #include <memory>
-#include <sys/stat.h>
-#include <unistd.h>
+#include <string>
 #include <utility>
 #include <vector>
+#if __UNIX__
+#include <unistd.h>
+#endif
+#if HP2_WINDOWS
+#include <shlobj.h>
+#endif
 
 namespace
 {
@@ -30,6 +35,11 @@ constexpr const char* ConventionalPrototypeDataSuffix =
 	"Library/Application Support/Harry Potter 2/Data/Prototype";
 constexpr const char* UserSuffix =
 	"Library/Application Support/Harry Potter 2/User";
+#elif HP2_WINDOWS
+constexpr const char* ExternalDataSuffix = "Harry Potter 2/Data/Unreal";
+constexpr const char* ConventionalRetailDataSuffix = "Harry Potter 2/Data/Retail";
+constexpr const char* ConventionalPrototypeDataSuffix = "Harry Potter 2/Data/Prototype";
+constexpr const char* UserSuffix = "Harry Potter 2/User";
 #else
 constexpr const char* ExternalDataSuffix = "harry-potter-2/Data/Unreal";
 constexpr const char* ConventionalRetailDataSuffix = "harry-potter-2/Data/Retail";
@@ -93,6 +103,36 @@ char* ResolveDataHomePrefix()
 {
 	return CanonicalizeExistingDirectory(std::getenv("HOME"));
 }
+#elif HP2_WINDOWS
+char* ResolveDataHomePrefix()
+{
+	const char* LocalAppData = std::getenv("LOCALAPPDATA");
+	std::filesystem::path Root;
+	std::error_code Ec;
+	if (LocalAppData && *LocalAppData)
+	{
+		Root = std::filesystem::u8path(LocalAppData);
+		if (!Root.is_absolute())
+			Root.clear();
+	}
+	if (Root.empty())
+	{
+		PWSTR KnownFolder = nullptr;
+		if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &KnownFolder))
+			&& KnownFolder)
+		{
+			Root = KnownFolder;
+			CoTaskMemFree(KnownFolder);
+		}
+	}
+	if (Root.empty() || !std::filesystem::is_directory(Root, Ec))
+		return nullptr;
+	const std::string Utf8 = Root.u8string();
+	char* Result = static_cast<char*>(std::malloc(Utf8.size() + 1));
+	if (Result)
+		std::memcpy(Result, Utf8.c_str(), Utf8.size() + 1);
+	return Result;
+}
 #else
 char* ResolveDataHomePrefix()
 {
@@ -122,7 +162,6 @@ bool GetConventionalDataRoot(
 	char* Home = ResolveDataHomePrefix();
 	if (!Home)
 		return false;
-
 	char* Root = JoinPath(Home, Suffix);
 	std::free(Home);
 	if (!Root)
@@ -134,34 +173,68 @@ bool GetConventionalDataRoot(
 
 bool IsReadableFile(const char* Filename)
 {
-	struct stat Info;
-	return Filename
-		&& stat(Filename, &Info) == 0
-		&& S_ISREG(Info.st_mode)
-		&& access(Filename, R_OK) == 0;
+	if (!Filename)
+		return false;
+	std::error_code Ec;
+	const std::filesystem::path Path = std::filesystem::u8path(Filename);
+	if (!std::filesystem::is_regular_file(Path, Ec) || Ec)
+		return false;
+#if __UNIX__
+	const std::filesystem::perms Permissions = std::filesystem::status(Path, Ec).permissions();
+	const std::filesystem::perms Readable =
+		std::filesystem::perms::owner_read | std::filesystem::perms::group_read
+		| std::filesystem::perms::others_read;
+	return !Ec && (Permissions & Readable) != std::filesystem::perms::none;
+#else
+	return true;
+#endif
 }
 
 bool IsDirectory(const char* Directory)
 {
-	struct stat Info;
-	return Directory && stat(Directory, &Info) == 0 && S_ISDIR(Info.st_mode);
+	std::error_code Ec;
+	return Directory && std::filesystem::is_directory(std::filesystem::u8path(Directory), Ec) && !Ec;
 }
 
 bool IsWritableDirectory(const char* Directory)
 {
-	return IsDirectory(Directory) && access(Directory, W_OK | X_OK) == 0;
+	if (!IsDirectory(Directory))
+		return false;
+#if __UNIX__
+	std::error_code Ec;
+	const std::filesystem::perms Permissions =
+		std::filesystem::status(std::filesystem::u8path(Directory), Ec).permissions();
+	const std::filesystem::perms OwnerRequired =
+		std::filesystem::perms::owner_write | std::filesystem::perms::owner_exec;
+	const std::filesystem::perms GroupRequired =
+		std::filesystem::perms::group_write | std::filesystem::perms::group_exec;
+	const std::filesystem::perms OthersRequired =
+		std::filesystem::perms::others_write | std::filesystem::perms::others_exec;
+	return !Ec
+		&& (((Permissions & OwnerRequired) == OwnerRequired)
+			|| ((Permissions & GroupRequired) == GroupRequired)
+			|| ((Permissions & OthersRequired) == OthersRequired));
+#else
+	return true;
+#endif
 }
 
 char* CanonicalizeExistingDirectory(const char* Directory)
 {
-	char* Canonical = Directory ? realpath(Directory, nullptr) : nullptr;
-	if (Canonical && !IsDirectory(Canonical))
-	{
-		std::free(Canonical);
-		Canonical = nullptr;
-	}
-	return Canonical;
+	if (!Directory)
+		return nullptr;
+	std::error_code Ec;
+	std::filesystem::path Canonical = std::filesystem::weakly_canonical(
+		std::filesystem::u8path(Directory), Ec);
+	if (Ec || !std::filesystem::is_directory(Canonical, Ec) || Ec)
+		return nullptr;
+	const std::string Utf8 = Canonical.u8string();
+	char* Result = static_cast<char*>(std::malloc(Utf8.size() + 1));
+	if (Result)
+		std::memcpy(Result, Utf8.c_str(), Utf8.size() + 1);
+	return Result;
 }
+
 
 bool IsSameOrDescendant(const char* Path, const char* Parent)
 {
@@ -169,7 +242,8 @@ bool IsSameOrDescendant(const char* Path, const char* Parent)
 	return std::strcmp(Path, Parent) == 0
 		|| (std::strncmp(Path, Parent, ParentLength) == 0
 			&& Path[ParentLength]
-			&& (ParentLength == 1 || Path[ParentLength] == '/'));
+			&& (ParentLength == 1 || Path[ParentLength] == '/'
+				|| Path[ParentLength] == '\\'));
 }
 
 constexpr const char* OverlayManifestName = "overlay-manifest.json";
@@ -1019,23 +1093,48 @@ char* ValidateDataRoot(const char* Candidate, HP2PathsBootstrapStatus* Status = 
 
 char* DiscoverDevelopmentDataRoot()
 {
+#if HP2_WINDOWS
+	std::error_code Ec;
+	std::filesystem::path Current = std::filesystem::current_path(Ec);
+	if (Ec)
+		return nullptr;
+	for (;;)
+	{
+		static const char* CandidateSuffixes[] = {
+			"out/retail-data", "HarryPotter2/Unreal"
+		};
+		const std::string CurrentUtf8 = Current.u8string();
+		for (const char* Suffix : CandidateSuffixes)
+		{
+			char* Candidate = JoinPath(CurrentUtf8.c_str(), Suffix);
+			char* CanonicalRoot = ValidateDataRoot(Candidate);
+			std::free(Candidate);
+			if (CanonicalRoot)
+				return CanonicalRoot;
+		}
+		const std::filesystem::path Parent = Current.parent_path();
+		if (Parent == Current || Parent.empty())
+			break;
+		Current = Parent;
+	}
+	return nullptr;
+#else
 	char* Current = getcwd(nullptr, 0);
 	if (!Current)
 		return nullptr;
-
 	for (;;)
 	{
-		static const char* CandidateSuffixes[] =
-		{
-			"out/retail-data",
-			"HarryPotter2/Unreal"
+		static const char* CandidateSuffixes[] = {
+			"out/retail-data", "HarryPotter2/Unreal"
 		};
-		for( size_t CandidateIndex=0; CandidateIndex<sizeof(CandidateSuffixes)/sizeof(CandidateSuffixes[0]); ++CandidateIndex )
+		for (size_t CandidateIndex = 0;
+			CandidateIndex < sizeof(CandidateSuffixes) / sizeof(CandidateSuffixes[0]);
+			++CandidateIndex)
 		{
 			char* Candidate = JoinPath(Current, CandidateSuffixes[CandidateIndex]);
 			char* CanonicalRoot = ValidateDataRoot(Candidate);
 			std::free(Candidate);
-			if( CanonicalRoot )
+			if (CanonicalRoot)
 			{
 				std::free(Current);
 				return CanonicalRoot;
@@ -1043,7 +1142,6 @@ char* DiscoverDevelopmentDataRoot()
 		}
 		if (std::strcmp(Current, "/") == 0)
 			break;
-
 		char* Slash = std::strrchr(Current, '/');
 		if (!Slash || Slash == Current)
 			Current[1] = '\0';
@@ -1052,14 +1150,34 @@ char* DiscoverDevelopmentDataRoot()
 	}
 	std::free(Current);
 	return nullptr;
+#endif
 }
 
 char* DiscoverPrototypeDataRoot()
 {
+#if HP2_WINDOWS
+	std::error_code Ec;
+	std::filesystem::path Current = std::filesystem::current_path(Ec);
+	if (Ec)
+		return nullptr;
+	for (;;)
+	{
+		const std::string CurrentUtf8 = Current.u8string();
+		char* Candidate = JoinPath(CurrentUtf8.c_str(), "HarryPotter2/Unreal");
+		char* CanonicalRoot = ValidateDataRoot(Candidate);
+		std::free(Candidate);
+		if (CanonicalRoot)
+			return CanonicalRoot;
+		const std::filesystem::path Parent = Current.parent_path();
+		if (Parent == Current || Parent.empty())
+			break;
+		Current = Parent;
+	}
+	return nullptr;
+#else
 	char* Current = getcwd(nullptr, 0);
 	if (!Current)
 		return nullptr;
-
 	for (;;)
 	{
 		char* Candidate = JoinPath(Current, "HarryPotter2/Unreal");
@@ -1072,7 +1190,6 @@ char* DiscoverPrototypeDataRoot()
 		}
 		if (std::strcmp(Current, "/") == 0)
 			break;
-
 		char* Slash = std::strrchr(Current, '/');
 		if (!Slash || Slash == Current)
 			Current[1] = '\0';
@@ -1081,44 +1198,81 @@ char* DiscoverPrototypeDataRoot()
 	}
 	std::free(Current);
 	return nullptr;
+#endif
 }
 
-bool EnsureDirectory(const char* Directory, mode_t Mode)
+#if __UNIX__
+std::filesystem::perms DirectoryPermissions(int Mode)
 {
-	if (Directory && mkdir(Directory, Mode) == 0)
-		return true;
-	return Directory && errno == EEXIST && IsDirectory(Directory);
+	std::filesystem::perms Result = std::filesystem::perms::none;
+	if (Mode & 0400) Result |= std::filesystem::perms::owner_read;
+	if (Mode & 0200) Result |= std::filesystem::perms::owner_write;
+	if (Mode & 0100) Result |= std::filesystem::perms::owner_exec;
+	if (Mode & 0040) Result |= std::filesystem::perms::group_read;
+	if (Mode & 0020) Result |= std::filesystem::perms::group_write;
+	if (Mode & 0010) Result |= std::filesystem::perms::group_exec;
+	if (Mode & 0004) Result |= std::filesystem::perms::others_read;
+	if (Mode & 0002) Result |= std::filesystem::perms::others_write;
+	if (Mode & 0001) Result |= std::filesystem::perms::others_exec;
+	return Result;
 }
+#endif
 
-bool EnsureDirectoryTree(const char* Directory, mode_t Mode)
+bool EnsureDirectory(const char* Directory, int Mode)
 {
-	if (!Directory || Directory[0] != '/')
+	if (!Directory)
 		return false;
-
-	const size_t Length = std::strlen(Directory);
-	char* Partial = static_cast<char*>(std::malloc(Length + 1));
-	if (!Partial)
-		return false;
-	std::memcpy(Partial, Directory, Length + 1);
-
-	bool Success = true;
-	for (size_t Index = 1; Index <= Length; ++Index)
+	std::error_code Ec;
+	const std::filesystem::path Path = std::filesystem::u8path(Directory);
+	if (std::filesystem::create_directory(Path, Ec))
 	{
-		if (Partial[Index] != '/' && Partial[Index] != '\0')
-			continue;
-		const char Saved = Partial[Index];
-		Partial[Index] = '\0';
-		if (Index > 1 && !EnsureDirectory(Partial, Mode))
-			Success = false;
-		Partial[Index] = Saved;
-		if (!Success)
-			break;
+#if __UNIX__
+		const std::filesystem::perms Existing =
+			std::filesystem::status(Path, Ec).permissions();
+		std::filesystem::permissions(Path, Existing & DirectoryPermissions(Mode),
+			std::filesystem::perm_options::replace, Ec);
+		return !Ec;
+#else
+		(void)Mode;
+		return true;
+#endif
 	}
-	std::free(Partial);
-	return Success;
+	(void)Mode;
+	Ec.clear();
+	return std::filesystem::is_directory(Path, Ec) && !Ec;
 }
 
-bool EnsureWritableChildDirectory(const char* Parent, const char* Child, mode_t Mode)
+bool EnsureDirectoryTree(const char* Directory, int Mode)
+{
+	if (!Directory)
+		return false;
+	(void)Mode;
+	const std::filesystem::path Path = std::filesystem::u8path(Directory);
+	if (!Path.is_absolute())
+		return false;
+	std::filesystem::path Current;
+	for (const std::filesystem::path& Component : Path)
+	{
+		Current /= Component;
+		if (Current.empty())
+			continue;
+		std::error_code Ec;
+		if (std::filesystem::create_directory(Current, Ec))
+		{
+#if __UNIX__
+			const std::filesystem::perms Existing =
+				std::filesystem::status(Current, Ec).permissions();
+			std::filesystem::permissions(Current, Existing & DirectoryPermissions(Mode),
+				std::filesystem::perm_options::replace, Ec);
+#endif
+		}
+		if (Ec || !std::filesystem::is_directory(Current, Ec) || Ec)
+			return false;
+	}
+	return true;
+}
+
+bool EnsureWritableChildDirectory(const char* Parent, const char* Child, int Mode)
 {
 	char* Directory = JoinPath(Parent, Child);
 	const bool Success = EnsureDirectory(Directory, Mode)
@@ -1132,6 +1286,8 @@ char* PrepareLauncherRoot(const char* DataHomePrefix)
 #if MACOSX
 	char* ApplicationSupport = JoinPath(
 		DataHomePrefix, "Library/Application Support/Harry Potter 2");
+#elif HP2_WINDOWS
+	char* ApplicationSupport = JoinPath(DataHomePrefix, "Harry Potter 2");
 #else
 	char* ApplicationSupport = JoinPath(DataHomePrefix, "harry-potter-2");
 #endif
@@ -1158,7 +1314,7 @@ char* PrepareLauncherRoot(const char* DataHomePrefix)
 
 char* PrepareActiveUserRoot(const char* UserRoot)
 {
-	if (!UserRoot || UserRoot[0] != '/'
+	if (!UserRoot || !std::filesystem::u8path(UserRoot).is_absolute()
 		|| !EnsureDirectoryTree(UserRoot, 0700))
 		return nullptr;
 
@@ -1192,7 +1348,7 @@ char* PrepareUserRoot(const char* Home)
 
 bool Utf8ToTchar(const char* Input, TCHAR*& Output)
 {
-	static_assert(sizeof(TCHAR) == 4, "Native macOS paths require 32-bit host TCHAR");
+	// appFromUtf8InPlace also emits UTF-16 surrogate pairs for Windows TCHAR.
 	Output = nullptr;
 	if (!Input)
 		return false;
@@ -1337,7 +1493,11 @@ bool PrepareHP2LauncherHome(std::string& LauncherRoot, std::string& Error)
 	char* Home = ResolveDataHomePrefix();
 	if (!Home)
 	{
+#if HP2_WINDOWS
+		Error = "LOCALAPPDATA does not name an existing directory";
+#else
 		Error = "HOME does not name an existing directory";
+#endif
 		return false;
 	}
 
@@ -1405,7 +1565,7 @@ bool InstallHP2Paths(
 	std::string CanonicalDataRoot;
 	if (!ValidateHP2DataRoot(DataRoot, CanonicalDataRoot, Error))
 		return false;
-	if (UserRoot.empty() || UserRoot[0] != '/')
+	if (UserRoot.empty() || !std::filesystem::u8path(UserRoot).is_absolute())
 	{
 		Error = "user directory must be an absolute path";
 		return false;
@@ -1487,9 +1647,7 @@ HP2PathsBootstrap BootstrapHP2Paths(int ArgC, char* const ArgV[])
 		}
 	}
 
-	const char* HomeEnvironment = std::getenv("HOME");
-	char* Home = CanonicalizeExistingDirectory(HomeEnvironment);
-	char* DataHomePrefix = Home ? ResolveDataHomePrefix() : nullptr;
+	char* DataHomePrefix = ResolveDataHomePrefix();
 
 	// Every conventional location the importer or the documented hand-copy
 	// flow can produce. The launcher already treats Retail and Prototype as
@@ -1519,10 +1677,9 @@ HP2PathsBootstrap BootstrapHP2Paths(int ArgC, char* const ArgV[])
 		}
 	}
 
-	if (!Home)
+	if (!DataHomePrefix)
 	{
-		std::fprintf(stderr, "hp2: HOME does not name an existing directory\n");
-		std::free(DataHomePrefix);
+		std::fprintf(stderr, "hp2: local application data directory is unavailable\n");
 		return Result;
 	}
 
@@ -1537,11 +1694,9 @@ HP2PathsBootstrap BootstrapHP2Paths(int ArgC, char* const ArgV[])
 			ExpectedUserRoot ? ExpectedUserRoot : UserSuffix);
 		std::free(ExpectedUserRoot);
 		std::free(DataHomePrefix);
-		std::free(Home);
 		return Result;
 	}
 	std::free(DataHomePrefix);
-	std::free(Home);
 
 	char* DataRoot = nullptr;
 	if (ExplicitDataDir)
@@ -1592,6 +1747,8 @@ HP2PathsBootstrap BootstrapHP2Paths(int ArgC, char* const ArgV[])
 	{
 #if MACOSX
 		const char* const DefaultExpectedRoot = "$HOME/Library/Application Support/Harry Potter 2/Data/Unreal";
+#elif HP2_WINDOWS
+		const char* const DefaultExpectedRoot = "%LOCALAPPDATA%/Harry Potter 2/Data/Unreal";
 #else
 		const char* const DefaultExpectedRoot = "$XDG_DATA_HOME/harry-potter-2/Data/Unreal";
 #endif

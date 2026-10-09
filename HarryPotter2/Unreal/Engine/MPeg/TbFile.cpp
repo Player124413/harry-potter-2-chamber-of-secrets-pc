@@ -5,21 +5,29 @@
 //*************************************************************************************************************
 
 #include <stdio.h>
-#if !defined(_WIN32)
 #include <fcntl.h>
 #include <limits.h>
+#if defined(_WIN32)
+#include <io.h>
+#else
 #include <unistd.h>
 #endif
+
+static int DecodeFileHandle(int handle)
+{
+	return handle - 1;
+}
 
 //*************************************************************************************************************
 
 int Default_FileOpen(const char* name, unsigned int mode)
 {
 #if defined(_WIN32)
-	FILE* fp = fopen(name, "rb");
-	return int(fp);
+	const int file = _open(name, _O_RDONLY | _O_BINARY);
+	return file < 0 ? 0 : file + 1;
 #else
-	return open(name, O_RDONLY);
+	const int file = open(name, O_RDONLY);
+	return file < 0 ? 0 : file + 1;
 #endif
 }
 
@@ -28,9 +36,9 @@ int Default_FileOpen(const char* name, unsigned int mode)
 void Default_FileClose(int handle)
 {
 #if defined(_WIN32)
-	fclose((FILE*)handle);
+	_close(DecodeFileHandle(handle));
 #else
-	close(handle);
+	close(DecodeFileHandle(handle));
 #endif
 }
 
@@ -41,9 +49,9 @@ int Default_FileRead(int handle, void* buffer, int length, bool blocking)
 	if (length < 0)
 		return -1;
 #if defined(_WIN32)
-	return fread(buffer, 1, length, (FILE*)handle);
+	return _read(DecodeFileHandle(handle), buffer, static_cast<unsigned int>(length));
 #else
-	const ssize_t result = read(handle, buffer, static_cast<size_t>(length));
+	const ssize_t result = read(DecodeFileHandle(handle), buffer, static_cast<size_t>(length));
 	if (result < 0 || result > INT_MAX)
 		return -1;
 	return static_cast<int>(result);
@@ -56,29 +64,27 @@ int Default_FileRead(int handle, void* buffer, int length, bool blocking)
 int Default_FileSeek(int handle, int offset, int mode)
 {
 #if defined(_WIN32)
-	return fseek((FILE*)handle, offset, mode);
+	return _lseek(DecodeFileHandle(handle), offset, mode) < 0 ? -1 : 0;
 #else
-	return lseek(handle, static_cast<off_t>(offset), mode) == static_cast<off_t>(-1) ? -1 : 0;
+	return lseek(DecodeFileHandle(handle), static_cast<off_t>(offset), mode) == static_cast<off_t>(-1) ? -1 : 0;
 #endif
 }
-
 //*************************************************************************************************************
 
 int Default_FileGetPos(int handle)
 {
 #if defined(_WIN32)
-	fpos_t pos;
-	fgetpos((FILE*)handle, &pos);
-	return int(pos);
+	const long pos = _lseek(DecodeFileHandle(handle), 0, SEEK_CUR);
+	if (pos < 0 || pos > INT_MAX)
+		return -1;
+	return static_cast<int>(pos);
 #else
-	const off_t pos = lseek(handle, 0, SEEK_CUR);
+	const off_t pos = lseek(DecodeFileHandle(handle), 0, SEEK_CUR);
 	if (pos < 0 || pos > INT_MAX)
 		return -1;
 	return static_cast<int>(pos);
 #endif
 }
-
-//*************************************************************************************************************
 
 int	Default_FileGetSize(int handle)
 {

@@ -28,49 +28,34 @@ Installed with Homebrew? It already did this for you.
 The runtime reads data files only. It never launches the original installer or
 the old game executable.
 
-In Terminal, paste:
+Open **HarryPotter2**. On a first run the launcher says **No game data yet** —
+that's the expected state, not an error. Click **Import retail game…** to pick
+the installed folder, or **Import retail archive…** for an archive of it:
 
-```sh
-"/Applications/HarryPotter2.app/Contents/Resources/Import Game Data.command"
-```
+- `.zip`, `.tar`, `.tar.gz`, `.tgz`, `.tar.bz2`, `.tbz2`, `.tar.xz`, `.txz`,
+  or `.7z`.
 
-It asks where your game is — drag your game folder or archive from Finder into
-the Terminal window and press Return. You can give it either:
-
-- the folder you installed the game into, or
-- an archive (`.zip`, `.tar`, `.tar.gz`, `.7z`) of that folder.
-
-If macOS asks to install **command line developer tools**, click **Install**,
-wait for it to finish, then paste the command again — that's how macOS
-provides the Python the importer needs.
-
-Press Return to accept each prompt. The importer copies the data to:
+The importer copies the data to:
 
 ```text
 ~/Library/Application Support/Harry Potter 2/Data/Retail
 ```
 
-and validates it. You can also run it from Terminal at any time:
+and validates it. A progress bar and cancel control remain in the launcher while
+the import runs; when it completes, **New Game** becomes available.
 
-```sh
-"/Applications/HarryPotter2.app/Contents/Resources/Import Game Data.command" \
-  --retail-root "/path/to/Harry Potter and the Chamber of Secrets" \
-  --output "$HOME/Library/Application Support/Harry Potter 2/Data/Retail" \
-  --profile retail-only \
-  --link-mode copy
-```
-
-The importer prints a summary and exits non-zero if anything is missing, so it
-is safe to re-run.
+The importer runs in-process in the launcher. It does not require Python or
+another external importer. Folder and supported archive imports use the same
+validation and can be run again safely.
 
 ## 3. Play
 
 Open **HarryPotter2** from Applications. The launcher window opens with:
 
-- **Game Data** — the imported retail folder is preselected. Use
-  **Choose Folder…** if you keep your data somewhere else.
-- **New Game** — start a fresh campaign.
-- **Continue** — resume from a save.
+- **Play** — **New Game** starts a fresh campaign; **Continue** resumes a save.
+- **Game Data** — choose Retail or Prototype. Retail imports go to the app's
+  conventional data folder; **Choose prototype folder…** assigns an external
+  validated prototype tree.
 
 Your saves, settings, and logs live in:
 
@@ -80,6 +65,11 @@ Your saves, settings, and logs live in:
 
 If something goes wrong, that directory holds `Launcher.log` and the engine
 log with the details.
+
+In **Graphics**, **Native text** selects the smooth CoreText renderer. The
+original 2002 bitmap-font path remains available for stock-font fidelity;
+turn **Native text** off, or set `NativeText=False` in the `[Display]` section
+of `Game.ini` in the user directory above.
 
 ## Requirements
 

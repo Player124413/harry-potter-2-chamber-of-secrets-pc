@@ -48,7 +48,12 @@ FOutputDeviceAnsiError Error;
 FFeedbackContextAnsi Warn;
 
 // File manager.
-#if WIN32
+#if HP2_WINDOWS || __UNIX__
+	#include "FFileManagerPlatformHP2.h"
+	FFileManagerPlatformHP2 FileManager;
+	#include "FMallocAnsi.h"
+	FMallocAnsi Malloc;
+#elif WIN32
 	#include "FFileManagerWindows.h"
 	FFileManagerWindows FileManager;
 	#include "FMallocWindows.h"
@@ -56,11 +61,6 @@ FFeedbackContextAnsi Warn;
 #elif __PSX2_EE__
 	#include "FFileManagerPSX2.h"
 	FFileManagerPSX2 FileManager;
-	#include "FMallocAnsi.h"
-	FMallocAnsi Malloc;
-#elif __UNIX__
-	#include "FFileManagerUnix.h"
-	FFileManagerUnix FileManager;
 	#include "FMallocAnsi.h"
 	FMallocAnsi Malloc;
 #else

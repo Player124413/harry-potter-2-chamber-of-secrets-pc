@@ -89,8 +89,8 @@ CORE_API class FGuid appCreateGuid();
 CORE_API void appCreateTempFilename( const TCHAR* Path, TCHAR* Result256 );
 CORE_API void appCleanFileCache();
 CORE_API UBOOL appFindPackageFile( const TCHAR* In, const FGuid* Guid, TCHAR* Out );
-#if __UNIX__
-// Convert an Unreal logical filename to normalized UTF-8 for POSIX APIs.
+#if __UNIX__ || HP2_WINDOWS
+// Convert an Unreal logical filename to normalized UTF-8 for host APIs.
 CORE_API UBOOL appToUtf8NativePath( const TCHAR* Filename, std::string& Out );
 #endif
 

@@ -2,42 +2,41 @@
 
 The native runtime does not bundle the copyrighted retail game data. Use this workflow with a retail installation you own. The importer reads data files only: it never launches the old installer, game executable, DLLs, Wine, Rosetta, or a virtual machine.
 
-## Easiest: run the bundled importer
+## Easiest: use the launcher
 
-If you installed the app (Homebrew or a disk image), the importer is already
-inside it and needs no checkout:
+Open the app and choose **Import retail game…** for an installed folder or
+**Import retail archive…** for an archive. The in-process C++ importer
+validates and copies data to `~/Library/Application Support/Harry Potter 2/Data/Retail`;
+re-running an import is safe. Player installs do not need Python or a separate
+importer.
 
-```sh
-"/Applications/HarryPotter2.app/Contents/Resources/Import Game Data.command"
-```
-
-Double-clicking that file from Finder gives the same walkthrough. It prompts
-for your retail folder or archive, writes to
-`~/Library/Application Support/Harry Potter 2/Data/Retail`, and prints a
-summary. Re-running it is safe.
-
-The rest of this document covers the importer's flags and validation rules for
-people calling it directly from a source checkout.
+`Build/prepare_retail_data.py` remains in the checkout as a reference oracle for
+the native implementation's parity tests; it is not shipped or used at runtime.
 
 ## Supported input
 
 Provide either:
 
 - an extracted retail installation directory with `System`, `Maps`, `Textures`, `Sounds`, `Music`, and `Help` below it; or
-- a ZIP, TAR-family, or 7z archive containing exactly one such installation tree.
+- a ZIP, TAR, or 7z archive containing exactly one such installation tree. Supported suffixes: `.zip`, `.tar`, `.tar.gz`, `.tgz`, `.tar.bz2`, `.tbz2`, `.tar.xz`, `.txz`, `.7z`.
 
-For 7z input, the importer uses the trusted macOS `/usr/bin/bsdtar`. Archive paths and entry types are validated before extraction. Windows executables, DLLs, installers, scripts, source-control metadata, symbolic links, and disguised PE binaries are excluded or rejected.
+The native importer uses its bundled libarchive build for ZIP, TAR-family, and
+7z input. Archive paths and entry types are validated before extraction.
+Windows executables, DLLs, installers, scripts, source-control metadata,
+symbolic links, and disguised PE binaries are excluded or rejected.
 
 A valid retail-only import contains the final 42 retail maps, the complete retail package and localization set, 214 cutscene localization files, retail audio/music, textures, and Help assets. It contains no prototype fallback assets.
 
-## Import for normal app launches
+## Developer CLI
 
-From this repository, run one of the following commands.
+The `hp2_import` CLI is a build-tree developer tool. It accepts the same
+profiles and input formats as the in-process API, but is not installed in the
+player bundle.
 
 From an archive:
 
 ```sh
-python3 Build/prepare_retail_data.py \
+out/macos-arm64/hp2_import \
   --archive "/path/to/Harry Potter and the Chamber of Secrets.7z" \
   --output "$HOME/Library/Application Support/Harry Potter 2/Data/Retail" \
   --profile retail-only \
@@ -47,19 +46,21 @@ python3 Build/prepare_retail_data.py \
 From an extracted installation:
 
 ```sh
-python3 Build/prepare_retail_data.py \
+out/macos-arm64/hp2_import \
   --retail-root "/path/to/Harry Potter and the Chamber of Secrets" \
   --output "$HOME/Library/Application Support/Harry Potter 2/Data/Retail" \
   --profile retail-only \
   --link-mode copy
 ```
 
-`copy` is the portable choice and leaves the source dump independent. `auto` may hard-link files when source and destination are on the same filesystem.
+`copy` is the portable choice and leaves the source dump independent. `auto`
+hard-links when source and destination are on the same filesystem, otherwise
+copies.
 
-Validate the completed import without changing it:
+Validate a completed import without changing it:
 
 ```sh
-python3 Build/prepare_retail_data.py \
+out/macos-arm64/hp2_import \
   --retail-root "/path/to/Harry Potter and the Chamber of Secrets" \
   --output "$HOME/Library/Application Support/Harry Potter 2/Data/Retail" \
   --profile retail-only \
@@ -67,7 +68,8 @@ python3 Build/prepare_retail_data.py \
   --check
 ```
 
-For archive-based validation, use the same `--archive` argument instead of `--retail-root`.
+For archive-based validation, use the same `--archive` argument instead of
+`--retail-root`.
 
 The importer writes `overlay-manifest.json` with per-file SHA-256 hashes, provenance, classifications, and profile metadata. A malformed or incomplete retail tree fails before launch rather than silently borrowing prototype files.
 
@@ -89,19 +91,11 @@ After a successful import, open:
 dist/macos-arm64/HarryPotter2.app
 ```
 
-In the native launcher, **Game Data** initially displays
-`~/Library/Application Support/Harry Potter 2/Data/Retail` for **Retail**,
-even before you import data there. Use **Choose Folder…** to assign that folder
-or any other validated retail root. The launcher does not automatically select
-`out/retail-data` or a `full` retail-plus-prototype output as either named
-source.
-
-**Prototype / Beta** is optional and uses the separate external location
-`~/Library/Application Support/Harry Potter 2/Data/Prototype`. It is not the
-repository checkout: choose that folder after placing a valid prototype/beta
-tree there, or use **Choose Folder…** to assign a different validated custom
-root. Choose **New Game** for a clean campaign or **Continue** for a listed
-save.
+In the launcher, the **Game Data** tab shows **Retail game data** and
+**Prototype data**. Importing retail data writes it to the conventional app
+destination. **Choose prototype folder…** assigns a separate validated
+prototype tree. Choose **New Game** for a clean campaign or **Continue** for a
+listed save.
 
 For an alternate validated output directory, launch explicitly:
 

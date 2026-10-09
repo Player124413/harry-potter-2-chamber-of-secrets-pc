@@ -11,6 +11,7 @@
 
 #include "HP2CrashReporter.h"
 
+#if __UNIX__
 #include <signal.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -23,7 +24,19 @@
 #include <time.h>
 #include <stdlib.h>
 #include <string.h>
+#else
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <signal.h>
+#include <thread>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <csignal>
+#endif
 
+#if __UNIX__
 namespace
 {
 	const int kMaxSignals = 5;
@@ -344,3 +357,66 @@ void HP2SetCrashReporterLogHint( const char* Utf8Path )
 	MemCopy( g_LogHint, Utf8Path, N );
 	g_LogHint[N] = 0;
 }
+#else
+namespace
+{
+	volatile LONG g_WindowsCrashInstalled = 0;
+	char g_WindowsArtifactDir[MAX_PATH] = ".";
+	char g_WindowsProcess[128] = "unknown";
+	double g_WindowsWatchdogSeconds = 0;
+	std::chrono::steady_clock::time_point g_WindowsStart;
+
+	void WriteWindowsCrash(const char* Reason)
+	{
+		char Path[MAX_PATH];
+		snprintf(Path, sizeof(Path), "%s\\crash-report.json", g_WindowsArtifactDir);
+		FILE* F = fopen(Path, "wb");
+		if (F)
+		{
+			fprintf(F, "{\"format\":\"hp2-crash\",\"schema_version\":1,\"exit_reason\":\"signal\",\"reason_code\":\"%s\",\"process\":\"%s\",\"frames\":[]}\n", Reason, g_WindowsProcess);
+			fclose(F);
+		}
+		fprintf(stderr, "HP2_CRASH %s %s\n", Reason, Path);
+		fflush(stderr);
+	}
+	LONG WINAPI WindowsException(EXCEPTION_POINTERS*)
+	{
+		WriteWindowsCrash("crash.exception");
+		return EXCEPTION_EXECUTE_HANDLER;
+	}
+	void Watchdog()
+	{
+		if (g_WindowsWatchdogSeconds <= 0) return;
+		std::this_thread::sleep_for(std::chrono::duration<double>(g_WindowsWatchdogSeconds));
+		WriteWindowsCrash("crash.watchdog.timeout");
+		raise(SIGABRT);
+	}
+	void AbortHandler(int) { WriteWindowsCrash("crash.signal"); std::signal(SIGABRT, SIG_DFL); std::raise(SIGABRT); }
+}
+void HP2InstallCrashReporter(const HP2CrashReporterConfig* Config)
+{
+	if (InterlockedCompareExchange(&g_WindowsCrashInstalled, 1, 0) != 0) return;
+	const char* ArtifactDir = getenv("HP2_ARTIFACT_DIR");
+	if (ArtifactDir && *ArtifactDir)
+	{
+		strncpy(g_WindowsArtifactDir, ArtifactDir, sizeof(g_WindowsArtifactDir) - 1);
+		g_WindowsArtifactDir[sizeof(g_WindowsArtifactDir) - 1] = 0;
+	}
+	if (Config)
+	{
+		if (Config->ProcessName)
+		{
+			strncpy(g_WindowsProcess, Config->ProcessName, sizeof(g_WindowsProcess) - 1);
+			g_WindowsProcess[sizeof(g_WindowsProcess) - 1] = 0;
+		}
+		g_WindowsWatchdogSeconds = Config->WatchdogSeconds > 0
+			? Config->WatchdogSeconds : 0;
+	}
+	g_WindowsStart = std::chrono::steady_clock::now();
+	SetUnhandledExceptionFilter(WindowsException);
+	std::signal(SIGABRT, AbortHandler);
+	if (g_WindowsWatchdogSeconds > 0) std::thread(Watchdog).detach();
+	fputs("HP2_CRASH installed\n", stderr);
+}
+void HP2SetCrashReporterLogHint(const char*) {}
+#endif

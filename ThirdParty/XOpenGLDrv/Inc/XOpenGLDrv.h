@@ -25,7 +25,15 @@ using std::isfinite;
 #include "Engine.h"
 #include "UnRender.h"
 
-#if !defined(_WIN32) && !defined(SDL2BUILD)
+#ifndef XOPENGL_WGL
+#if defined(_WIN32) && !XOPENGL_USE_SDL
+#define XOPENGL_WGL 1
+#else
+#define XOPENGL_WGL 0
+#endif
+#endif
+
+#if !XOPENGL_WGL && !defined(SDL2BUILD)
 # define SDL2BUILD 1
 #endif
 

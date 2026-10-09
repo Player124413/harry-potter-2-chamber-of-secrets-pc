@@ -24,7 +24,7 @@
 #include "Core.h"
 #include "Engine.h"
 #include "FMallocAnsi.h"
-#include "FFileManagerUnix.h"
+#include "FFileManagerPlatformHP2.h"
 // FReplay arrives via Engine.h -> UnGame.h; UnReplay.h itself is unguarded,
 // so it must not be included a second time here.
 
@@ -608,7 +608,7 @@ int main(int ArgC, char** ArgV)
 	// aborts on use. Without this, behavior is layout-dependent (observed as
 	// an env-sensitive segfault inside the first vector insert).
 	FMallocAnsi Allocator;
-	FFileManagerUnix FileManager;
+	FFileManagerPlatformHP2 FileManager;
 	GMalloc = &Allocator;
 	GFileManager = &FileManager;
 

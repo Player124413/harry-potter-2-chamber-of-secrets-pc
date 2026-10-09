@@ -90,6 +90,8 @@ private:
 #if __UNIX__
 	#include "UnUnix.h"
 	#include <signal.h>
+#elif HP2_WINDOWS
+	#include "UnWindowsHP2.h"
 #endif
 
 // Global constants.
@@ -134,8 +136,13 @@ enum ENoInit {E_NoInit = 0};
 			? static_cast<UNICHAR>(In)
 			: static_cast<UNICHAR>(0xfffd);
 	}
+#if defined(_WIN32)
+	static_assert(sizeof(TCHAR) == 2, "Windows TCHAR must use UTF-16");
+	static_assert(sizeof(TCHARU) == 2, "Windows TCHARU must use UTF-16");
+#else
 	static_assert(sizeof(TCHAR) == 4, "host TCHAR must use 32-bit wchar_t");
 	static_assert(sizeof(TCHARU) == 4, "host TCHAR must use 32-bit wchar_t");
+#endif
 	static_assert(sizeof(UNICHAR) == 2, "Serialized Unicode must remain UTF-16");
 #elif defined(_UNICODE)
 	#ifndef _TCHAR_DEFINED
@@ -164,6 +171,17 @@ enum ENoInit {E_NoInit = 0};
 	inline ANSICHAR ToAnsi     ( TCHAR In    ) { return (_WORD)In<0x100 ? In : MAXSBYTE; }
 	inline UNICHAR  ToUnicode  ( TCHAR In    ) { return (BYTE)In;                        }
 #endif
+
+constexpr bool HP2HostWideIsValid()
+{
+#if defined(_WIN32)
+	return sizeof(wchar_t) == 2;
+#else
+	return sizeof(wchar_t) == 4;
+#endif
+}
+static_assert(HP2HostWideIsValid(), "Host wide-character width is unsupported");
+static_assert(sizeof(void*) == 8, "Supported native targets are 64-bit");
 
 /*----------------------------------------------------------------------------
 	Forward declarations.

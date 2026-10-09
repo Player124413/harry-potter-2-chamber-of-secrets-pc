@@ -6,7 +6,7 @@
 #include "NativeTextShared.h"
 #include "HP2Paths.h"
 #include "FMallocAnsi.h"
-#include "FFileManagerUnix.h"
+#include "FFileManagerPlatformHP2.h"
 #include "FFeedbackContextAnsi.h"
 #include "FConfigCacheIni.h"
 
@@ -47,7 +47,7 @@ public:
 FSilentLog RuntimeLog;
 FCapturingError RuntimeError;
 FFeedbackContextAnsi RuntimeWarn;
-FFileManagerUnix RuntimeFileManager;
+FFileManagerPlatformHP2 RuntimeFileManager;
 FMallocAnsi RuntimeMalloc;
 
 bool InitializeRuntime( int ArgC, char** ArgV )

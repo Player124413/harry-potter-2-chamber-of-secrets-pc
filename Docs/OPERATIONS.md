@@ -263,15 +263,10 @@ Two artifacts, both built locally from the same bundle:
 cmake --build out/macos-arm64 --target hp2_macos_dmg
 ```
 
-The DMG contains the app, a symlink to `/Applications`, `How to play.txt` (a
-copy of `Docs/PLAYING.md`), and a copy of `Import Game Data.command` with the
-importer beside it, so the image is usable without ever reaching the app
-bundle. The bundle also carries `Contents/Resources/Import Game Data.command`,
-so a Homebrew install reaches the same importer.
-
-The importer needs `python3` on the machine. A stock Mac has none, so the
-wrapper checks for it and prints install instructions rather than failing with
-"command not found".
+The DMG contains the app, a symlink to `/Applications`, and `How to play.txt`
+(a copy of `Docs/PLAYING.md`). Game-data import runs in-process in the launcher;
+the bundle does not ship a separate importer or require Python on the player
+machine.
 
 The bundle ships exactly one `Contents/Frameworks/libopenal.1.dylib` — the
 soname the executable resolves. It must stay a real file with no symlink
@@ -315,8 +310,9 @@ if the tag's version does not match `CMakeLists.txt`.
 ## Provenance bundle (placeholder)
 
 Retail imports produce `overlay-manifest.json` (SHA-256 per file, provenance,
-classification, profile metadata) via `Build/prepare_retail_data.py`; see
-[../RETAIL_IMPORT.md](../RETAIL_IMPORT.md). A dedicated provenance-bundle
+classification, profile metadata) through the C++ `HP2Import::RunImport` API.
+`Build/prepare_retail_data.py` remains the reference oracle for importer parity;
+see [../RETAIL_IMPORT.md](../RETAIL_IMPORT.md). A dedicated provenance-bundle
 verification flow (validating a manifest bundle as a first-class artifact with
 its own reason codes and artifacts) is planned and will be documented here once
 it lands. Runtime enforcement of import-time manifests is landing separately;
