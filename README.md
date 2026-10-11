@@ -1,4 +1,4 @@
-# Harry Potter and the Chamber of Secrets
+# Harry Potter and the Chamber of Secrets PC: Mac/Linux/Windows/Web Native
 
 Play the 2002 game with a modern launcher on macOS, Windows, Linux, and Raspberry Pi. A browser build is also available for compatible browsers.
 
