@@ -41,11 +41,13 @@ jobs:
           set -o pipefail
           gradle assembleDebug --stacktrace 2>&1 | tee build.log
 
-      - name: Upload build log on failure
+      - name: Annotate failure
         if: failure()
+        working-directory: Android
         run: |
-          echo "### Build log (tail) ###" >> $GITHUB_STEP_SUMMARY
-          tail -n 200 Android/build.log >> $GITHUB_STEP_SUMMARY || true
+          tail -n 120 build.log | while IFS= read -r line; do
+            echo "::error::$line"
+          done
 
       - name: Upload APK
         if: success()
