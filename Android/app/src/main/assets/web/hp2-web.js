@@ -626,11 +626,14 @@
   (async function init() {
     if (!self.crossOriginIsolated) {
       setStatus(COOP_STATUS);
+      logToBoth('Web startup failed: ' + COOP_STATUS);
       reportSmoke('failed', COOP_STATUS);
       return;
     }
     if (!navigator.storage || !('getDirectory' in navigator.storage)) {
-      setStatus('This browser has no private file storage, so the game cannot be installed here.');
+      const message = 'This browser has no private file storage, so the game cannot be installed here.';
+      setStatus(message);
+      logToBoth('Web startup failed: ' + message);
       reportSmoke('failed', 'no origin-private file system (OPFS)');
       return;
     }

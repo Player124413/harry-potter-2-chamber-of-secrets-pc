@@ -7,7 +7,9 @@ import android.view.KeyEvent
 import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -67,7 +69,9 @@ class GameActivity : AppCompatActivity() {
         try {
             localServer.start()
         } catch (e: Exception) {
-            android.util.Log.e("Hp2Server", "start failed", e)
+            val message = "Local game server failed to start: $e"
+            AndroidWebSmokeProbe.fail(message)
+            android.util.Log.e("Hp2Server", message, e)
             finish()
             return
         }
@@ -91,6 +95,41 @@ class GameActivity : AppCompatActivity() {
         ws.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
         binding.webView.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
         binding.webView.webViewClient = object : WebViewClient() {
+            override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                AndroidWebSmokeProbe.record("WebView page started: ${url ?: "<unknown>"}")
+            }
+
+            override fun onPageFinished(view: WebView?, url: String?) {
+                AndroidWebSmokeProbe.record("WebView page finished: ${url ?: "<unknown>"}")
+                view?.evaluateJavascript(
+                    "(function(){var s=document.getElementById('status');var n=navigator.storage;" +
+                        "return JSON.stringify({readyState:document.readyState," +
+                        "status:s?s.textContent:null,crossOriginIsolated:!!self.crossOriginIsolated," +
+                        "opfs:!!(n&&n.getDirectory)});})()",
+                ) { state -> AndroidWebSmokeProbe.record("WebView state: $state") }
+            }
+
+            override fun onReceivedError(
+                view: WebView?, request: WebResourceRequest, error: WebResourceError,
+            ) {
+                val message = "WebView load error ${error.errorCode} for ${request.url}: ${error.description}"
+                android.util.Log.e("HP2Web", message)
+                if (request.isForMainFrame) AndroidWebSmokeProbe.fail(message)
+                else AndroidWebSmokeProbe.record(message)
+            }
+
+            override fun onReceivedHttpError(
+                view: WebView?, request: WebResourceRequest, response: WebResourceResponse,
+            ) {
+                val message = "WebView HTTP ${response.statusCode} ${response.reasonPhrase} for ${request.url}"
+                android.util.Log.e("HP2Web", message)
+                val path = request.url.path.orEmpty()
+                val requiredAsset = path.endsWith("/hp2_game.js") ||
+                    path.endsWith("/hp2_game.wasm") || path.endsWith("/hp2-web.js")
+                if (request.isForMainFrame || requiredAsset) AndroidWebSmokeProbe.fail(message)
+                else AndroidWebSmokeProbe.record(message)
+            }
+
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest): Boolean {
                 val uri = request.url
                 // Keep the JavaScript interface confined to the bundled same-origin game.
@@ -256,6 +295,12 @@ object AndroidWebSmokeProbe {
         launcherReady = false
         startupError = null
         lastLog = ""
+    }
+
+    fun fail(message: String) {
+        val detail = message.take(1000)
+        startupError = detail
+        lastLog = detail
     }
 
     fun record(message: String) {
