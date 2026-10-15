@@ -9,10 +9,11 @@ configurable touch-control overlay.
 - Launcher screen (New Game / Continue / select your own game-data folder).
 - Android's Storage Access Framework (SAF) picker feeds the selected folder
   into the engine's existing retail/prototype import flow.
-- The Android CI workflow builds and packages a dedicated single-threaded
-  WebAssembly engine; it is not downloaded at runtime. Android WebView does not
-  expose `crossOriginIsolated` / `SharedArrayBuffer`, which the browser's
-  pthread-enabled build requires.
+- The Android CI workflow builds and packages a dedicated wasm32,
+  single-threaded WebAssembly engine; it is not downloaded at runtime. Android
+  WebView does not expose `crossOriginIsolated` / `SharedArrayBuffer`, which the
+  browser's pthread-enabled build requires, and wasm32 avoids requiring newer
+  WebView support for WebAssembly Memory64.
 - The normal browser build remains pthread-enabled and uses COOP/COEP. The
   Android-specific build avoids that unsupported WebView requirement.
 - Virtual D-pad and action buttons send key events to the game.
