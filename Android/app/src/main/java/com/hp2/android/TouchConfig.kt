@@ -24,7 +24,7 @@ data class ButtonConfig(
 )
 
 data class TouchConfigData(
-    val enabled: Boolean = true,
+    var enabled: Boolean = true,
     val buttons: MutableList<ButtonConfig> = mutableListOf(),
 )
 
