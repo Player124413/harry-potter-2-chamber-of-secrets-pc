@@ -96,6 +96,9 @@ jobs:
           set -o pipefail
           gradle assembleDebug --stacktrace 2>&1 | tee build.log
 
+      - name: Initialize emulator-test diagnostics
+        run: echo 'The emulator runner has not started its test script yet.' > Android/emulator-test.log
+
       - name: Enable KVM for Android emulator
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -113,12 +116,13 @@ jobs:
           profile: pixel_2
           disable-animations: true
           emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -no-metrics
-          working-directory: Android
+          working-directory: ${{ github.workspace }}/Android
           script: |
             # android-emulator-runner executes each script line in a separate shell.
-            # Keep the failure handler on the same line as Gradle so its log is preserved.
-            gradle connectedDebugAndroidTest --stacktrace > emulator-test.log 2>&1 || { cat emulator-test.log; exit 1; }
-            cat emulator-test.log
+            # Use an absolute log path so upload-artifact can collect it after the action exits.
+            echo "Emulator script started; cwd=$PWD" >> "$GITHUB_WORKSPACE/Android/emulator-test.log"
+            gradle connectedDebugAndroidTest --stacktrace >> "$GITHUB_WORKSPACE/Android/emulator-test.log" 2>&1 || { cat "$GITHUB_WORKSPACE/Android/emulator-test.log"; exit 1; }
+            cat "$GITHUB_WORKSPACE/Android/emulator-test.log"
 
       - name: Annotate failure diagnostics
         if: failure()
