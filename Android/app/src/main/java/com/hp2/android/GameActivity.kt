@@ -81,7 +81,7 @@ class GameActivity : AppCompatActivity() {
         setupWebView()
         setupOverlay()
         setupButtons()
-        binding.webView.loadUrl("http://127.0.0.1:$port/index.html")
+        binding.webView.loadUrl("http://127.0.0.1:$port/index.html?hp2AndroidSingleThreaded=1")
     }
 
     private fun setupWebView() {

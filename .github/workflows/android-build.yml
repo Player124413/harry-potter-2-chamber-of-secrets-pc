@@ -8,7 +8,7 @@ on:
 
 jobs:
   build-web:
-    name: Build real WebAssembly game assets
+    name: Build Android-compatible WebAssembly assets
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -29,24 +29,24 @@ jobs:
           "$RUNNER_TEMP/emsdk/emsdk" activate "$tag"
           echo "EMSDK=$RUNNER_TEMP/emsdk" >> "$GITHUB_ENV"
 
-      - name: Configure WebAssembly build
-        run: source "$EMSDK/emsdk_env.sh" && cmake --preset web-wasm64
+      - name: Configure Android WebAssembly build
+        run: source "$EMSDK/emsdk_env.sh" && cmake --preset web-android
 
-      - name: Build WebAssembly game
-        run: source "$EMSDK/emsdk_env.sh" && cmake --build --preset web-wasm64
+      - name: Build single-threaded Android WebAssembly game
+        run: source "$EMSDK/emsdk_env.sh" && cmake --build --preset web-android
 
-      - name: Verify and upload WebAssembly assets
+      - name: Verify and upload Android WebAssembly assets
         run: |
-          test -s dist/web-wasm64/hp2_game.js
-          test -s dist/web-wasm64/hp2_game.wasm
-          ! grep -qi "placeholder" dist/web-wasm64/hp2_game.js
-          du -h dist/web-wasm64/hp2_game.js dist/web-wasm64/hp2_game.wasm
-        # Keep the browser shell, fonts, and actual compiled engine together.
-        # The Android job packages these exact files into its APK.
+          test -s dist/web-android/hp2_game.js
+          test -s dist/web-android/hp2_game.wasm
+          ! grep -qi "placeholder" dist/web-android/hp2_game.js
+          du -h dist/web-android/hp2_game.js dist/web-android/hp2_game.wasm
+        # Android WebView cannot provide SharedArrayBuffer, so the APK uses a
+        # separate single-threaded build of the same WebAssembly engine.
       - uses: actions/upload-artifact@v4
         with:
-          name: hp2-web-assets
-          path: dist/web-wasm64/
+          name: hp2-android-web-assets
+          path: dist/web-android/
           if-no-files-found: error
 
   build-android:
@@ -60,7 +60,7 @@ jobs:
       - name: Download compiled game assets
         uses: actions/download-artifact@v4
         with:
-          name: hp2-web-assets
+          name: hp2-android-web-assets
           path: Android/app/src/main/assets/web
 
       - name: Confirm APK will contain the real game module

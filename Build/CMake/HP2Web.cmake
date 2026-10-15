@@ -1,11 +1,19 @@
 # Browser (WebAssembly) build surface. Included only under EMSCRIPTEN by the
 # root CMakeLists; the native path includes HP2Install instead.
 #
-# Milestone 1 ships a single module plus a static shell, served from one
-# directory with COOP/COEP so pthreads stay real threads. Every claim about this
-# port holds for the data-prototype profile only.
+# The normal browser target uses COOP/COEP and real pthreads. Android WebView
+# does not expose cross-origin isolation, so its app packages a separate
+# single-threaded module while using the same WebAssembly engine and shell.
+# Every game-data claim in this browser surface holds for data-prototype only.
 
-set(HP2_WEB_DIST_DIR "${PROJECT_SOURCE_DIR}/dist/web-wasm64")
+option(HP2_WEB_SINGLE_THREADED
+    "Build the WebAssembly target without pthreads for Android WebView" OFF)
+if(HP2_WEB_SINGLE_THREADED)
+    target_compile_definitions(hp2_compile_policy INTERFACE HP2_WEB_SINGLE_THREADED=1)
+    set(HP2_WEB_DIST_DIR "${PROJECT_SOURCE_DIR}/dist/web-android")
+else()
+    set(HP2_WEB_DIST_DIR "${PROJECT_SOURCE_DIR}/dist/web-wasm64")
+endif()
 set(HP2_WEB_SHELL_DIR "${PROJECT_SOURCE_DIR}/Web")
 
 if(NOT TARGET hp2_game)
@@ -21,9 +29,9 @@ endif()
 # name (hp2_game.js + hp2_game.wasm) does not depend on toolchain defaults.
 set_target_properties(hp2_game PROPERTIES SUFFIX ".js")
 
-# -sMEMORY64=1 -pthread -fwasm-exceptions -sSUPPORT_LONGJMP=wasm already come
-# from the preset's global flags so FetchContent dependencies compile for the
-# same target.
+# Memory64, exception, and longjmp flags come from the preset's global flags
+# so FetchContent dependencies compile for the same target. The Android preset
+# deliberately omits -pthread; Android WebView cannot provide SharedArrayBuffer.
 # The Emscripten FreeType/HarfBuzz ports, when a native text provider needs
 # them. Reading a global property rather than a variable because the provider
 # declaration in HP2Dependencies.cmake publishes it that way.
@@ -46,8 +54,6 @@ target_link_options(hp2_game PRIVATE
     -sINITIAL_MEMORY=536870912
     -sMAXIMUM_MEMORY=4294967296
     -sSTACK_SIZE=8388608
-    -sDEFAULT_PTHREAD_STACK_SIZE=2097152
-    -sPTHREAD_POOL_SIZE=4
     # The engine opens packages through the FS API; the browser shell copies
     # imported data into MEMFS and mounts IDBFS over the user root.
     -sFORCE_FILESYSTEM=1
@@ -57,6 +63,13 @@ target_link_options(hp2_game PRIVATE
     # entry point: it runs main with the launcher's arguments.
     "-sEXPORTED_RUNTIME_METHODS=FS,ENV,AL,addRunDependency,removeRunDependency,callMain"
 )
+
+if(NOT HP2_WEB_SINGLE_THREADED)
+    target_link_options(hp2_game PRIVATE
+        -sDEFAULT_PTHREAD_STACK_SIZE=2097152
+        -sPTHREAD_POOL_SIZE=4
+    )
+endif()
 
 add_custom_target(hp2_web ALL
     DEPENDS hp2_game
@@ -81,20 +94,21 @@ add_custom_target(hp2_web ALL
     VERBATIM
 )
 
-# Headless verification for the browser build. Both drive the real staged
-# directory in a real browser: shell proves cross-origin isolation plus
-# wasm64 module instantiation (data-none), boot proves the engine reaches its
-# main loop and renders (data-prototype, so it is gated on the data root).
-hp2_add_behavior_test(web_shell_smoke "${Python3_EXECUTABLE}"
-    "${PROJECT_SOURCE_DIR}/Build/web_smoke.py" --mode=shell "--root=${HP2_WEB_DIST_DIR}")
-set_tests_properties(web_shell_smoke PROPERTIES LABELS "smoke;data-none")
-hp2_add_behavior_test(web_launcher_smoke "${Python3_EXECUTABLE}"
-    "${PROJECT_SOURCE_DIR}/Build/web_smoke.py" --mode=launcher "--root=${HP2_WEB_DIST_DIR}")
-set_tests_properties(web_launcher_smoke PROPERTIES LABELS "smoke;data-none" RESOURCE_LOCK hp2_gpu)
-if(HP2_TEST_DATA_PRESENT)
-    hp2_add_behavior_test(web_boot_smoke "${Python3_EXECUTABLE}"
-        "${PROJECT_SOURCE_DIR}/Build/web_smoke.py" --mode=boot "--root=${HP2_WEB_DIST_DIR}"
-        "--data-root=${HP2_TEST_DATA_ROOT}" --map=PrivetDr.unr)
-    set_tests_properties(web_boot_smoke PROPERTIES
-        LABELS "smoke;data-prototype" RESOURCE_LOCK hp2_gpu)
+if(NOT HP2_WEB_SINGLE_THREADED)
+    # Headless browser tests exercise the pthread-enabled target under COOP/COEP.
+    # Android's single-threaded target is verified by its emulator workflow.
+    hp2_add_behavior_test(web_shell_smoke "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/Build/web_smoke.py" --mode=shell "--root=${HP2_WEB_DIST_DIR}")
+    set_tests_properties(web_shell_smoke PROPERTIES LABELS "smoke;data-none")
+    hp2_add_behavior_test(web_launcher_smoke "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/Build/web_smoke.py" --mode=launcher "--root=${HP2_WEB_DIST_DIR}")
+    set_tests_properties(web_launcher_smoke PROPERTIES
+        LABELS "smoke;data-none" RESOURCE_LOCK hp2_gpu)
+    if(HP2_TEST_DATA_PRESENT)
+        hp2_add_behavior_test(web_boot_smoke "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/Build/web_smoke.py" --mode=boot "--root=${HP2_WEB_DIST_DIR}"
+            "--data-root=${HP2_TEST_DATA_ROOT}" --map=PrivetDr.unr)
+        set_tests_properties(web_boot_smoke PROPERTIES
+            LABELS "smoke;data-prototype" RESOURCE_LOCK hp2_gpu)
+    endif()
 endif()

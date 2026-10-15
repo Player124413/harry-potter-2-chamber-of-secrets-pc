@@ -348,6 +348,55 @@ UBOOL CreateXALocked(INT StreamId, TLazyArray<BYTE>* RawData, INT NumSamples)
 	return 1;
 }
 
+void ProcessPendingStream(INT StreamId)
+{
+	if (StreamId < 0 || StreamId >= FFileStream::MaxStreams) return;
+	std::lock_guard<std::mutex> Lock(StreamMutex(StreamId));
+	FStream& Stream = FFileStream::Streams[StreamId];
+	if (!Stream.Used || Stream.PendingCount == 0)
+		return;
+
+	void* Destination = Stream.PendingDestinations[Stream.PendingHead];
+	{
+		std::lock_guard<std::mutex> WorkLock(GRuntime.WorkMutex);
+		Stream.PendingHead = (
+			Stream.PendingHead + 1) % FILE_STREAM_REQUEST_CAPACITY;
+		--Stream.PendingCount;
+		if (Stream.PendingCount == 0)
+			Stream.PendingHead = 0;
+		if (GRuntime.PendingRequests > 0)
+			--GRuntime.PendingRequests;
+	}
+
+	const UBOOL ReadSucceeded = ReadStreamLocked(
+		StreamId, Stream.ChunkSize, Destination);
+	if (!ReadSucceeded)
+		Stream.EndOfFile = 1;
+
+	{
+		std::lock_guard<std::mutex> WorkLock(GRuntime.WorkMutex);
+		FStreamCompletion* Completion = NULL;
+		for (size_t Offset = 0; Offset < Stream.CompletionCount; ++Offset)
+		{
+			FStreamCompletion& Candidate = Stream.CompletedChunks[
+				(Stream.CompletionHead + Offset)
+				% FILE_STREAM_REQUEST_CAPACITY];
+			if (!Candidate.Ready && Candidate.Destination == Destination)
+			{
+				Completion = &Candidate;
+				break;
+			}
+		}
+		check(Completion != NULL);
+		Completion->Terminal = Stream.EndOfFile != 0;
+		Completion->Ready = 1;
+	}
+
+	if (Stream.EndOfFile)
+		CancelPendingDestinationsLocked(Stream);
+}
+
+#if !defined(HP2_WEB_SINGLE_THREADED)
 void FileStreamingWorker()
 {
 	for (;;)
@@ -362,53 +411,10 @@ void FileStreamingWorker()
 		}
 
 		for (INT StreamId = 0; StreamId < FFileStream::MaxStreams; ++StreamId)
-		{
-			std::lock_guard<std::mutex> Lock(StreamMutex(StreamId));
-			FStream& Stream = FFileStream::Streams[StreamId];
-			if (!Stream.Used || Stream.PendingCount == 0)
-				continue;
-
-			void* Destination = Stream.PendingDestinations[Stream.PendingHead];
-			{
-				std::lock_guard<std::mutex> WorkLock(GRuntime.WorkMutex);
-				Stream.PendingHead = (
-					Stream.PendingHead + 1) % FILE_STREAM_REQUEST_CAPACITY;
-				--Stream.PendingCount;
-				if (Stream.PendingCount == 0)
-					Stream.PendingHead = 0;
-				if (GRuntime.PendingRequests > 0)
-					--GRuntime.PendingRequests;
-			}
-
-			const UBOOL ReadSucceeded = ReadStreamLocked(
-				StreamId, Stream.ChunkSize, Destination);
-			if (!ReadSucceeded)
-				Stream.EndOfFile = 1;
-
-			{
-				std::lock_guard<std::mutex> WorkLock(GRuntime.WorkMutex);
-				FStreamCompletion* Completion = NULL;
-				for (size_t Offset = 0; Offset < Stream.CompletionCount; ++Offset)
-				{
-					FStreamCompletion& Candidate = Stream.CompletedChunks[
-						(Stream.CompletionHead + Offset)
-						% FILE_STREAM_REQUEST_CAPACITY];
-					if (!Candidate.Ready && Candidate.Destination == Destination)
-					{
-						Completion = &Candidate;
-						break;
-					}
-				}
-				check(Completion != NULL);
-				Completion->Terminal = Stream.EndOfFile != 0;
-				Completion->Ready = 1;
-			}
-
-			if (Stream.EndOfFile)
-				CancelPendingDestinationsLocked(Stream);
-		}
+			ProcessPendingStream(StreamId);
 	}
 }
+#endif
 
 INT FindAvailableStream()
 {
@@ -448,6 +454,7 @@ FFileStream* FFileStream::Init(INT InMaxStreams)
 	GRuntime.Active = 1;
 	Instance = NewInstance;
 
+#if !defined(HP2_WEB_SINGLE_THREADED)
 	try
 	{
 		GRuntime.Worker = std::thread(FileStreamingWorker);
@@ -464,6 +471,7 @@ FFileStream* FFileStream::Init(INT InMaxStreams)
 		Destroyed = 2;
 		return NULL;
 	}
+#endif
 
 	return Instance;
 }
@@ -640,7 +648,14 @@ UBOOL FFileStream::RequestChunk(INT StreamId, void* Destination)
 		++Stream.PendingCount;
 		++GRuntime.PendingRequests;
 	}
+#if defined(HP2_WEB_SINGLE_THREADED)
+	// Android WebView lacks SharedArrayBuffer, so its WebAssembly build cannot
+	// run a worker. Complete each refill inline; PopCompletedChunk still observes
+	// the same completion queue contract on the next audio update.
+	ProcessPendingStream(StreamId);
+#else
 	GRuntime.WorkReady.notify_one();
+#endif
 	return 1;
 }
 

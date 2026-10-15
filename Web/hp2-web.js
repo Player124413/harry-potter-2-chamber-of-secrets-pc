@@ -10,6 +10,7 @@
   const devMode = params.has('devdata');
   const smokeMode = ['shell', 'boot', 'launcher'].indexOf(params.get('smoke')) >= 0
     ? params.get('smoke') : null;
+  const androidSingleThreaded = params.get('hp2AndroidSingleThreaded') === '1';
   const canvas = document.getElementById('canvas');
   const statusEl = document.getElementById('status');
   const logEl = document.getElementById('log');
@@ -624,7 +625,7 @@
   }
 
   (async function init() {
-    if (!self.crossOriginIsolated) {
+    if (!androidSingleThreaded && !self.crossOriginIsolated) {
       setStatus(COOP_STATUS);
       logToBoth('Web startup failed: ' + COOP_STATUS);
       reportSmoke('failed', COOP_STATUS);
