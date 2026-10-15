@@ -22,6 +22,13 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          sdk-version: '34.0.0'
+
+      - name: Install SDK components
+        run: |
+          sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools" || true
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -30,9 +37,18 @@ jobs:
 
       - name: Build debug APK
         working-directory: Android
-        run: gradle assembleDebug --stacktrace
+        run: |
+          set -o pipefail
+          gradle assembleDebug --stacktrace 2>&1 | tee build.log
+
+      - name: Upload build log on failure
+        if: failure()
+        run: |
+          echo "### Build log (tail) ###" >> $GITHUB_STEP_SUMMARY
+          tail -n 200 Android/build.log >> $GITHUB_STEP_SUMMARY || true
 
       - name: Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: app-debug-apk
