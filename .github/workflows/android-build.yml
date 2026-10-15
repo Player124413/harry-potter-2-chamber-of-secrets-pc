@@ -113,12 +113,11 @@ jobs:
           profile: pixel_2
           disable-animations: true
           emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -no-metrics
+          working-directory: Android
           script: |
-            cd Android
-            if ! gradle connectedDebugAndroidTest --stacktrace --no-daemon > emulator-test.log 2>&1; then
-              cat emulator-test.log
-              exit 1
-            fi
+            # android-emulator-runner executes each script line in a separate shell.
+            # Keep the failure handler on the same line as Gradle so its log is preserved.
+            gradle connectedDebugAndroidTest --stacktrace > emulator-test.log 2>&1 || { cat emulator-test.log; exit 1; }
             cat emulator-test.log
 
       - name: Annotate failure diagnostics
