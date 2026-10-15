@@ -276,6 +276,35 @@
 
   function nextId() { return nextRequestId++; }
 
+  async function processFolderSelection(request, entries) {
+    try {
+      if (!entries || entries.length === 0) throw new Error('No files were found in the selected folder.');
+      if (request.kind === 'prototype') {
+        await importEntries(entries);
+        bridgeComplete(request.id, true, '');
+      } else {
+        const m = currentModule;
+        const source = '/hp2import/source';
+        removeFsTree(m.FS, source);
+        mkdirTree(m.FS, source);
+        for (let i = 0; i < entries.length; ++i) {
+          const entry = entries[i];
+          const rel = String(entry.path).replace(/\\/g, '/');
+          if (rel.split('/').some((part) => !part || part === '.' || part === '..')) {
+            throw new Error('Unsafe file path: ' + rel);
+          }
+          const path = source + '/' + rel;
+          mkdirTree(m.FS, path.slice(0, path.lastIndexOf('/')));
+          m.FS.writeFile(path, new Uint8Array(await entry.read()));
+          if ((i & 31) === 31) await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+        bridgeComplete(request.id, true, source);
+      }
+    } catch (err) {
+      bridgeComplete(request.id, false, String(err));
+    }
+  }
+
   function makeFolderOverlay() {
     if (folderOverlay) return folderOverlay;
     const overlay = document.createElement('div');
@@ -298,34 +327,11 @@
       overlayRequest = null;
       overlay.hidden = true;
       if (!request) return;
-      try {
-        if (!input.files || input.files.length === 0) throw new Error('No folder was selected.');
-        const selected = Array.from(input.files);
-        if (request.kind === 'prototype') {
-          await importEntries(selected.map((file) => ({
-            path: file.webkitRelativePath || file.name,
-            read: () => file.arrayBuffer(),
-          })));
-          bridgeComplete(request.id, true, '');
-        } else {
-          const m = currentModule;
-          const source = '/hp2import/source';
-          removeFsTree(m.FS, source);
-          mkdirTree(m.FS, source);
-          for (let i = 0; i < selected.length; ++i) {
-            const file = selected[i];
-            const rel = (file.webkitRelativePath || file.name).replace(/\\/g, '/');
-            if (rel.split('/').some((part) => !part || part === '.' || part === '..')) {
-              throw new Error('Unsafe file path: ' + rel);
-            }
-            const path = source + '/' + rel;
-            mkdirTree(m.FS, path.slice(0, path.lastIndexOf('/')));
-            m.FS.writeFile(path, new Uint8Array(await file.arrayBuffer()));
-            if ((i & 31) === 31) await new Promise((resolve) => setTimeout(resolve, 0));
-          }
-          bridgeComplete(request.id, true, source);
-        }
-      } catch (err) { bridgeComplete(request.id, false, String(err)); }
+      const selected = Array.from(input.files || []);
+      await processFolderSelection(request, selected.map((file) => ({
+        path: file.webkitRelativePath || file.name,
+        read: () => file.arrayBuffer(),
+      })));
       input.value = '';
     });
     input.addEventListener('cancel', function () {
@@ -342,12 +348,71 @@
         message.textContent = request.kind === 'prototype'
           ? 'Choose the folder containing your prototype game data.'
           : 'Choose the folder containing your retail game files.';
+        if (window.Hp2Android && typeof window.Hp2Android.pickFolder === 'function') {
+          const key = String(request.id);
+          pendingPickers.set(key, request);
+          overlayRequest = null;
+          overlay.hidden = true;
+          try {
+            window.Hp2Android.pickFolder(key, request.kind);
+          } catch (err) {
+            pendingPickers.delete(key);
+            bridgeComplete(request.id, false, String(err));
+          }
+          return;
+        }
         overlay.hidden = false;
         button.focus();
       },
     };
     return folderOverlay;
   }
+
+  window.hp2AndroidFolderResult = async function (requestId, kind, files, error, importToken) {
+    const key = String(requestId);
+    const request = pendingPickers.get(key);
+    if (!request) return;
+    pendingPickers.delete(key);
+    try {
+      if (request.kind !== kind) throw new Error('Folder picker returned the wrong data type.');
+      if (error) throw new Error(String(error));
+      if (!/^[0-9a-f]{32}$/i.test(String(importToken || ''))) {
+        throw new Error('Android returned an invalid folder token.');
+      }
+      const token = encodeURIComponent(String(importToken));
+      let manifest = files;
+      if (!Array.isArray(manifest)) {
+        const response = await fetch('/__hp2_android_import/' + token + '/manifest',
+          { cache: 'no-store' });
+        if (!response.ok) throw new Error('Could not list the selected folder (HTTP ' +
+          response.status + ').');
+        manifest = await response.json();
+      }
+      const entries = manifest.map((file) => {
+        const index = Number(file.index);
+        if (!Number.isSafeInteger(index) || index < 0) {
+          throw new Error('Invalid file index from Android folder picker.');
+        }
+        return {
+          path: String(file.path || ''),
+          read: async function () {
+            const response = await fetch('/__hp2_android_import/' + token + '/' + index,
+              { cache: 'no-store' });
+            if (!response.ok) throw new Error('Could not read imported file ' + file.path +
+              ' (HTTP ' + response.status + ').');
+            return response.arrayBuffer();
+          },
+        };
+      });
+      await processFolderSelection(request, entries);
+    } catch (err) {
+      bridgeComplete(request.id, false, String(err));
+    } finally {
+      if (window.Hp2Android && typeof window.Hp2Android.releaseFolder === 'function') {
+        window.Hp2Android.releaseFolder(key);
+      }
+    }
+  };
 
   function exposeBridge(m) {
     m.hp2Web = {

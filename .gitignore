@@ -3,6 +3,16 @@
 /dist/
 /cmake-build-*/
 
+# Android Studio / Gradle products
+/Android/.gradle/
+/Android/local.properties
+/Android/**/build/
+*.apk
+
+# Generated WebAssembly payloads staged locally for Android packaging
+/Android/app/src/main/assets/web/hp2_game.*
+/Android/app/src/main/assets/web/fonts/
+
 # CMake, CTest, and Ninja products (including accidental in-source builds)
 CMakeFiles/
 CMakeCache.txt
