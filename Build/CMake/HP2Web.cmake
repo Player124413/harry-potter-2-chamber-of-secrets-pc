@@ -29,10 +29,11 @@ endif()
 # name (hp2_game.js + hp2_game.wasm) does not depend on toolchain defaults.
 set_target_properties(hp2_game PROPERTIES SUFFIX ".js")
 
-# Exception and longjmp flags come from the preset's global flags so
-# FetchContent dependencies compile for the same target. Android targets wasm32
-# for wider WebView compatibility and omits -pthread because WebView cannot
-# provide SharedArrayBuffer.
+# Memory64, exception, and longjmp flags come from the preset's global flags
+# so FetchContent dependencies compile for the same target. Android uses
+# MEMORY64=2: keep the 64-bit C++ ABI but lower the final module to wasm32 for
+# WebView compatibility; it also omits -pthread because WebView lacks
+# SharedArrayBuffer.
 # The Emscripten FreeType/HarfBuzz ports, when a native text provider needs
 # them. Reading a global property rather than a variable because the provider
 # declaration in HP2Dependencies.cmake publishes it that way.

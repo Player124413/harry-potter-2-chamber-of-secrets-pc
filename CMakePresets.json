@@ -256,7 +256,7 @@
     },
     {
       "name": "web-android",
-      "displayName": "WebAssembly (wasm32, single-threaded) for Android WebView",
+      "displayName": "WebAssembly (64-bit ABI lowered to wasm32) for Android WebView",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/out/web-android",
       "cacheVariables": {
@@ -265,9 +265,9 @@
         "CMAKE_POLICY_VERSION_MINIMUM": "3.5",
         "HP2_REQUIRE_IMPLEMENTED_SOURCES": "ON",
         "HP2_WEB_SINGLE_THREADED": "ON",
-        "CMAKE_C_FLAGS": "-fwasm-exceptions -sSUPPORT_LONGJMP=wasm",
-        "CMAKE_CXX_FLAGS": "-fwasm-exceptions -sSUPPORT_LONGJMP=wasm",
-        "CMAKE_EXE_LINKER_FLAGS": "-fwasm-exceptions -sSUPPORT_LONGJMP=wasm"
+        "CMAKE_C_FLAGS": "-sMEMORY64=2 -fwasm-exceptions -sSUPPORT_LONGJMP=wasm",
+        "CMAKE_CXX_FLAGS": "-sMEMORY64=2 -fwasm-exceptions -sSUPPORT_LONGJMP=wasm",
+        "CMAKE_EXE_LINKER_FLAGS": "-sMEMORY64=2 -fwasm-exceptions -sSUPPORT_LONGJMP=wasm"
       }
     }
   ],

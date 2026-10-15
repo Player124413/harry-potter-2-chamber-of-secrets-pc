@@ -30,11 +30,11 @@ if(APPLE)
     endif()
 elseif(EMSCRIPTEN)
     set(HP2_TARGET_ARCH wasm64 CACHE INTERNAL "Target architecture")
-    # The browser port targets wasm64 so that every package/ABI layout matches
-    # the verified arm64 builds.
+    # All web builds use a 64-bit C++ ABI matching the verified arm64 builds.
+    # The Android preset lowers wasm64 to a wasm32 runtime with MEMORY64=2.
     if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
         message(FATAL_ERROR
-            "HarryPotter2Native web builds require wasm64 (-sMEMORY64=1).")
+            "HarryPotter2Native web builds require a 64-bit pointer ABI (Emscripten wasm64/MEMORY64).")
     endif()
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|x86_64|AMD64)$")
