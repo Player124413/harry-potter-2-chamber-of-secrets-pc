@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.view.KeyEvent
+import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -96,7 +97,13 @@ class GameActivity : AppCompatActivity() {
                 return uri.scheme != "http" || uri.host != "127.0.0.1" || uri.port != port
             }
         }
-        binding.webView.webChromeClient = WebChromeClient()
+        binding.webView.webChromeClient = object : WebChromeClient() {
+            override fun onConsoleMessage(message: ConsoleMessage): Boolean {
+                AndroidWebSmokeProbe.record(message.message())
+                android.util.Log.d("HP2Web", message.message())
+                return true
+            }
+        }
         binding.webView.addJavascriptInterface(AndroidGameDataBridge(this), "Hp2Android")
     }
 
@@ -234,6 +241,31 @@ class GameActivity : AppCompatActivity() {
     @Suppress("DEPRECATION")
     override fun onBackPressed() {
         if (binding.webView.canGoBack()) binding.webView.goBack() else super.onBackPressed()
+    }
+}
+
+object AndroidWebSmokeProbe {
+    @Volatile var launcherReady: Boolean = false
+        private set
+    @Volatile var startupError: String? = null
+        private set
+    @Volatile var lastLog: String = ""
+        private set
+
+    fun reset() {
+        launcherReady = false
+        startupError = null
+        lastLog = ""
+    }
+
+    fun record(message: String) {
+        lastLog = message.take(1000)
+        if (message.contains("HP2Launcher: ready")) launcherReady = true
+        if (message.contains("Web startup failed") ||
+            message.contains("This browser has no private file storage") ||
+            message.contains("WebGL2 is unavailable")) {
+            startupError = message.take(1000)
+        }
     }
 }
 

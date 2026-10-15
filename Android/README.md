@@ -45,10 +45,10 @@ assets into the Android project, builds the debug APK, and uploads it as
 ## Current status / known gap
 
 This is still a work-in-progress Android wrapper, not a release-ready port.
-The workflow builds the real game module into the APK, and the native SAF
-picker is connected to the existing import flow, but launching, importing data,
-and playing on an Android device have not yet been verified on an emulator or
-physical device.
+The workflow builds the real game module and runs an Android-emulator smoke test
+that checks the in-game launcher renders. Importing a real game-data folder,
+starting a map, long-session stability, and touch-control feel still need
+validation on an emulator or physical device with user-owned game data.
 
 ## Notes
 
