@@ -115,18 +115,24 @@ jobs:
           emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -no-metrics
           script: |
             cd Android
-            gradle connectedDebugAndroidTest --stacktrace
+            if ! gradle connectedDebugAndroidTest --stacktrace --no-daemon > emulator-test.log 2>&1; then
+              cat emulator-test.log
+              exit 1
+            fi
+            cat emulator-test.log
 
-      - name: Annotate failure
+      - name: Annotate failure diagnostics
         if: failure()
         working-directory: Android
         run: |
-          grep -inE "error|exception|could not|failed|cannot" build.log | head -n 60 | while IFS= read -r line; do
-            echo "::error::$line"
-          done
-          echo "::error::--- head of build.log ---"
-          head -n 40 build.log | while IFS= read -r line; do
-            echo "::error::$line"
+          for file in build.log emulator-test.log; do
+            if [ -f "$file" ]; then
+              echo "::group::$file diagnostics"
+              grep -inE "error|exception|could not|failed|cannot|timeout|assertion|WebGL|WebAssembly|HP2Launcher" "$file" | tail -n 100 | while IFS= read -r line; do
+                echo "::error::$line"
+              done
+              echo "::endgroup::"
+            fi
           done
 
       - name: Upload APK
@@ -142,5 +148,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: android-smoke-test-results
-          path: Android/app/build/reports/androidTests/connected/
+          path: |
+            Android/emulator-test.log
+            Android/app/build/reports/androidTests/connected/
+            Android/app/build/outputs/androidTest-results/connected/
           if-no-files-found: ignore
