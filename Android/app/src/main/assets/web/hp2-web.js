@@ -267,8 +267,12 @@
       const bytes = new TextEncoder().encode(payload == null ? '' : String(payload));
       pointer = m._malloc(bytes.length + 1);
       if (!pointer) throw new Error('Could not allocate web bridge payload.');
-      m.HEAPU8.set(bytes, pointer);
-      m.HEAPU8[pointer + bytes.length] = 0;
+      const offset = typeof pointer === 'bigint' ? Number(pointer) : pointer;
+      if (!Number.isSafeInteger(offset) || offset < 0) {
+        throw new Error('Web bridge pointer is outside JavaScript typed-array range.');
+      }
+      m.HEAPU8.set(bytes, offset);
+      m.HEAPU8[offset + bytes.length] = 0;
       m._hp2_web_bridge_done(id, ok ? 1 : 0, pointer);
     } finally {
       if (pointer && typeof m._free === 'function') m._free(pointer);
@@ -662,9 +666,11 @@
         currentModule.callMain(['-LOG']);
       }
     } catch (err) {
-      setStatus('Loading the game failed: ' + err);
-      logToBoth('Web startup failed: ' + err);
-      reportSmoke('failed', 'module instantiation failed: ' + err);
+      const message = err && err.message ? err.message : String(err);
+      const details = err && err.stack ? String(err.stack) : message;
+      setStatus('Loading the game failed: ' + message);
+      logToBoth('Web startup failed: ' + details);
+      reportSmoke('failed', 'startup failed: ' + message);
     }
   })();
 })();

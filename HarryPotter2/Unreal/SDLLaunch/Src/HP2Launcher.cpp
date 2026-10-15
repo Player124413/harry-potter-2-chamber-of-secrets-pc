@@ -129,7 +129,10 @@ extern "C" EMSCRIPTEN_KEEPALIVE void hp2_web_bridge_done(int requestId, int ok, 
 EM_JS(void, HP2WebCall, (int requestId, int operation, const char* argument), {
 	const api = Module.hp2Web;
 	if (!api) return;
-	const arg = UTF8ToString(argument);
+	// MEMORY64 exposes pointers to EM_JS as BigInt, while UTF8ToString reads
+	// the wasm heap through a JavaScript typed-array index (a Number). The
+	// Android MEMORY64=2 runtime is capped at 4 GiB, so this conversion is exact.
+	const arg = UTF8ToString(Number(argument));
 	switch (operation) {
 	case 0: api.dataSourceStatus(requestId); break;
 	case 1: api.pickFolder(requestId, arg); break;
