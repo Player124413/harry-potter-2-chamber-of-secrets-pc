@@ -47,3 +47,30 @@ dependencies {
     implementation("org.nanohttpd:nanohttpd:2.3.1")
     implementation("org.json:json:20240303")
 }
+
+// Refuse to create an APK that silently contains the checked-in placeholder.
+// Run the web-wasm64 build and copy dist/web-wasm64/* into src/main/assets/web
+// first; CI does this automatically before invoking Gradle.
+val verifyWebGameAssets = tasks.register("verifyWebGameAssets") {
+    group = "verification"
+    description = "Checks that the actual WebAssembly game module is staged."
+    doLast {
+        val webDir = file("src/main/assets/web")
+        val js = webDir.resolve("hp2_game.js")
+        val wasm = webDir.resolve("hp2_game.wasm")
+        if (!js.isFile || js.length() == 0L || !wasm.isFile || wasm.length() == 0L) {
+            throw GradleException(
+                "Real WebAssembly assets are missing. Build with `cmake --preset web-wasm64` " +
+                    "and `cmake --build --preset web-wasm64`, then copy dist/web-wasm64/* " +
+                    "into app/src/main/assets/web/."
+            )
+        }
+        if (js.readText().contains("placeholder", ignoreCase = true)) {
+            throw GradleException("hp2_game.js is still a placeholder, not the game module.")
+        }
+    }
+}
+
+tasks.named("preBuild") {
+    dependsOn(verifyWebGameAssets)
+}
