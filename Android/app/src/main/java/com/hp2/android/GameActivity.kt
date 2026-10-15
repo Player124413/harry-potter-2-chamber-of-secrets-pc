@@ -98,7 +98,7 @@ class GameActivity : AppCompatActivity() {
     }
 }
 
-class Hp2Server(private val activity: GameActivity) : NanoHTTPD(0) {
+class Hp2Server(private val activity: GameActivity) : NanoHTTPD("127.0.0.1", 0) {
     override fun serve(session: IHTTPSession): Response {
         val uri = session.uri.substringBefore('?')
         val path = if (uri == "/" || uri.isBlank()) "/index.html" else uri
